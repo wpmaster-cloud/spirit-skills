@@ -1,0 +1,18 @@
+{
+  "//": "Copy this to ./mcps.json at the workspace root and fill it in. It holds tokens — keep it git-ignored (add a line `mcps.json` to .gitignore). A \"token\" becomes `Authorization: Bearer <token>`; use \"headers\" for anything else. A whole-value $VAR or ${VAR} is read from the environment, so secrets can stay out of the file.",
+
+  "servers": {
+    "linear": {
+      "url": "https://mcp.linear.app/mcp",
+      "token": "$LINEAR_MCP_TOKEN"
+    },
+
+    "example": {
+      "url": "https://mcp.example.com/mcp",
+      "token": "paste-a-real-token-here",
+      "headers": {
+        "X-Org-Id": "spirit"
+      }
+    }
+  }
+}

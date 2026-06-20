@@ -1,0 +1,14 @@
+# OS / editor cruft.
+.DS_Store
+*.swp
+
+# Local secrets — skills ship *.example/config.env.example templates that ARE
+# committed; never commit the filled-in real versions or private keys.
+.env
+.env.*
+config.env
+*.key
+
+# Python caches from bundled helper scripts.
+__pycache__/
+*.pyc
