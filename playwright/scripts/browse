@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# browse — drive the shared browser-go browser AND make the run watchable.
+#
+# It's a thin wrapper over browser-go's HTTP API that keeps your session+page ids
+# in $AGENT_HOME/.browser.json (a dotfile, invisible to the vault index). That one
+# file is what lets spirit's UI attach a LIVE screencast of the page — so prefer
+# `browse` over raw curl whenever you want a human to watch you work. Reusing one
+# persistent session across calls (instead of one-shot /render) is exactly what
+# makes the live view possible.
+#
+# Usage:
+#   browse goto URL            navigate (opens a session if none is live)
+#   browse click SELECTOR
+#   browse fill SELECTOR VALUE
+#   browse press SELECTOR KEY
+#   browse text [SELECTOR]     inner text (default: body)
+#   browse content             full HTML of the page
+#   browse wait [STATE]        load|domcontentloaded|networkidle (default networkidle)
+#   browse eval EXPR           run JS, return the result
+#   browse shot [full]         PNG of the page to stdout (full=full_page)
+#   browse url                 print the current {session_id,page_id}
+#   browse close               end the session and forget it
+set -euo pipefail
+
+B="${BROWSER_URL:-http://browser-go.spirit-browser.svc.cluster.local}"
+H="Authorization: Bearer ${BROWSER_TOKEN:-}"   # ignored by browser-go when it runs open
+STATE="${AGENT_HOME:-$PWD}/.browser.json"
+
+api() { curl -fsS -H "$H" "$@"; }
+
+# ensure_session sets SID/PID to a live session, reusing the recorded one when it's
+# still alive (browser-go reaps idle sessions after ~10m) and creating a fresh one
+# otherwise. The new ids are written to $STATE so the UI can find them.
+ensure_session() {
+  if [ -f "$STATE" ]; then
+    SID=$(jq -r '.session_id // empty' "$STATE")
+    PID=$(jq -r '.page_id // empty' "$STATE")
+    if [ -n "$SID" ] && [ -n "$PID" ] \
+       && api "$B/sessions/$SID/pages/$PID/act" -d '{"action":"title"}' >/dev/null 2>&1; then
+      return
+    fi
+  fi
+  local sp
+  sp=$(api "$B/sessions" -d '{"width":1280,"height":800}')
+  SID=$(jq -r .session_id <<<"$sp")
+  PID=$(jq -r .page_id <<<"$sp")
+  jq -nc --arg s "$SID" --arg p "$PID" '{session_id:$s,page_id:$p}' > "$STATE"
+}
+
+act() { api "$B/sessions/$SID/pages/$PID/act" -d "$1"; }
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  goto)    ensure_session; act "$(jq -nc --arg u "${1:?url}" '{action:"goto",url:$u}')" ;;
+  click)   ensure_session; act "$(jq -nc --arg s "${1:?selector}" '{action:"click",selector:$s}')" ;;
+  fill)    ensure_session; act "$(jq -nc --arg s "${1:?selector}" --arg v "${2-}" '{action:"fill",selector:$s,value:$v}')" ;;
+  press)   ensure_session; act "$(jq -nc --arg s "${1:?selector}" --arg k "${2:?key}" '{action:"press",selector:$s,key:$k}')" ;;
+  text)    ensure_session; act "$(jq -nc --arg s "${1:-body}" '{action:"text",selector:$s}')" ;;
+  content) ensure_session; act '{"action":"content"}' ;;
+  wait)    ensure_session; act "$(jq -nc --arg s "${1:-networkidle}" '{action:"wait",state:$s}')" ;;
+  eval)    ensure_session; act "$(jq -nc --arg e "${1:?expr}" '{action:"eval",expr:$e}')" ;;
+  shot)    ensure_session; [ "${1:-}" = "full" ] && fp=true || fp=false
+           api "$B/sessions/$SID/pages/$PID/screenshot?full_page=$fp" ;;
+  url)     [ -f "$STATE" ] && cat "$STATE" || echo '{}' ;;
+  close)
+    if [ -f "$STATE" ]; then
+      SID=$(jq -r '.session_id // empty' "$STATE")
+      [ -n "$SID" ] && api -X DELETE "$B/sessions/$SID" >/dev/null 2>&1 || true
+      rm -f "$STATE"
+    fi ;;
+  *)
+    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'  # print the usage header
+    exit 2 ;;
+esac

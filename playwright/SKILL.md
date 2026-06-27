@@ -42,6 +42,27 @@ agents use the one browser in parallel safely. Full API in the browser-go
 README. The rest of this skill (local install, the Python API) applies when
 you're on a glibc machine — a dev box, a CI runner, or a non-musl container.
 
+### Want a human to watch you browse? Use `scripts/browse`
+
+`skills/playwright/scripts/browse` wraps the curl dance above and — crucially —
+records your live session to `$AGENT_HOME/.browser.json`, which is what lets the
+spirit UI attach a **live screencast** of the page (the AgentPanel's *Browser*
+tool). Same verbs, no SID/PID bookkeeping, and the session persists across calls
+(one-shot `/render` leaves nothing to watch):
+
+```bash
+browse goto https://example.com/login
+browse fill "#user" alice
+browse fill "#pass" secret
+browse click "button[type=submit]"
+browse wait networkidle
+browse text h1            # → {"text":"..."}
+browse close             # end the session when done
+```
+
+Prefer `browse` over raw curl whenever the run should be watchable. It honours
+`$BROWSER_URL` (injected by the server), falling back to the in-cluster DNS name.
+
 ## When to use Playwright vs web-extraction
 
 These overlap (both can load a page in a browser), so pick the lighter tool when you can:
