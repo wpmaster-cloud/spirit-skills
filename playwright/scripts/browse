@@ -32,13 +32,12 @@ api() { curl -fsS -H "$H" "$@"; }
 # still alive (browser-go reaps idle sessions after ~10m) and creating a fresh one
 # otherwise. The new ids are written to $STATE so the UI can find them.
 ensure_session() {
-  if [ -f "$STATE" ]; then
-    SID=$(jq -r '.session_id // empty' "$STATE")
-    PID=$(jq -r '.page_id // empty' "$STATE")
-    if [ -n "$SID" ] && [ -n "$PID" ] \
-       && api "$B/sessions/$SID/pages/$PID/act" -d '{"action":"title"}' >/dev/null 2>&1; then
-      return
-    fi
+  # Reuse the recorded session when its handle is readable AND still alive
+  # (browser-go reaps idle sessions after ~10m). A missing/corrupt state file
+  # just fails the jq reads in this if-condition and falls through to a new one.
+  if SID=$(jq -re .session_id "$STATE" 2>/dev/null) && PID=$(jq -re .page_id "$STATE" 2>/dev/null) \
+     && api "$B/sessions/$SID/pages/$PID/act" -d '{"action":"title"}' >/dev/null 2>&1; then
+    return
   fi
   local sp
   sp=$(api "$B/sessions" -d '{"width":1280,"height":800}')
@@ -63,11 +62,11 @@ case "$cmd" in
            api "$B/sessions/$SID/pages/$PID/screenshot?full_page=$fp" ;;
   url)     [ -f "$STATE" ] && cat "$STATE" || echo '{}' ;;
   close)
-    if [ -f "$STATE" ]; then
-      SID=$(jq -r '.session_id // empty' "$STATE")
-      [ -n "$SID" ] && api -X DELETE "$B/sessions/$SID" >/dev/null 2>&1 || true
-      rm -f "$STATE"
-    fi ;;
+    # Always remove the state file, even if it's missing/corrupt or the DELETE fails.
+    if SID=$(jq -re .session_id "$STATE" 2>/dev/null); then
+      api -X DELETE "$B/sessions/$SID" >/dev/null 2>&1 || true
+    fi
+    rm -f "$STATE" ;;
   *)
     sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'  # print the usage header
     exit 2 ;;
