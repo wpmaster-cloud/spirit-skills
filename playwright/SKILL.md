@@ -60,6 +60,18 @@ browse text h1            # → {"text":"..."}
 browse close             # end the session when done
 ```
 
+You can run **several sessions at once** — each is an isolated browser context
+(own cookies/storage), so e.g. two accounts or two sites side by side. Name
+them with `-s` (no `-s` = the "default" session); the UI's Browser view shows a
+tab per session:
+
+```bash
+browse -s linkedin goto https://linkedin.com/login
+browse -s research goto https://example.com/docs
+browse sessions           # → linkedin  live / research  live
+browse -s research close  # close one; `browse close all` ends everything
+```
+
 Prefer `browse` over raw curl whenever the run should be watchable. It honours
 `$BROWSER_URL` (injected by the server), falling back to the in-cluster DNS name.
 

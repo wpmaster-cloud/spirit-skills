@@ -8,34 +8,52 @@
 # persistent session across calls (instead of one-shot /render) is exactly what
 # makes the live view possible.
 #
+# You can hold SEVERAL sessions at once (each an isolated browser context with
+# its own cookies): name them with -s. Without -s you get the "default" session.
+#
 # Usage:
-#   browse goto URL            navigate (opens a session if none is live)
-#   browse click SELECTOR
-#   browse fill SELECTOR VALUE
-#   browse press SELECTOR KEY
-#   browse text [SELECTOR]     inner text (default: body)
-#   browse content             full HTML of the page
-#   browse wait [STATE]        load|domcontentloaded|networkidle (default networkidle)
-#   browse eval EXPR           run JS, return the result
-#   browse shot [full]         PNG of the page to stdout (full=full_page)
-#   browse url                 print the current {session_id,page_id}
-#   browse close               end the session and forget it
+#   browse [-s NAME] goto URL       navigate (opens the session if none is live)
+#   browse [-s NAME] click SELECTOR
+#   browse [-s NAME] fill SELECTOR VALUE
+#   browse [-s NAME] press SELECTOR KEY
+#   browse [-s NAME] text [SELECTOR]  inner text (default: body)
+#   browse [-s NAME] content        full HTML of the page
+#   browse [-s NAME] wait [STATE]   load|domcontentloaded|networkidle (default networkidle)
+#   browse [-s NAME] eval EXPR      run JS, return the result
+#   browse [-s NAME] shot [full]    PNG of the page to stdout (full=full_page)
+#   browse sessions                 list recorded sessions and whether each is live
+#   browse url                      print the recorded {name: {session_id,page_id}} map
+#   browse [-s NAME] close          end that session and forget it
+#   browse close all                end every recorded session
 set -euo pipefail
 
 B="${BROWSER_URL:-http://browser-go.spirit-browser.svc.cluster.local}"
 H="Authorization: Bearer ${BROWSER_TOKEN:-}"   # ignored by browser-go when it runs open
 STATE="${AGENT_HOME:-$PWD}/.browser.json"
 
+NAME=default
+if [ "${1:-}" = "-s" ]; then NAME="${2:?session name}"; shift 2; fi
+
 api() { curl -fsS -H "$H" "$@"; }
 
-# ensure_session sets SID/PID to a live session, reusing the recorded one when it's
-# still alive (browser-go reaps idle sessions after ~10m) and creating a fresh one
-# otherwise. The new ids are written to $STATE so the UI can find them.
+# read_state prints the {name: {session_id,page_id}} map, normalizing the legacy
+# single-session file ({session_id,page_id} at top level → nested under "default").
+read_state() {
+  jq -c 'if has("sessions") then .sessions
+         elif has("session_id") then {default: .}
+         else {} end' "$STATE" 2>/dev/null || echo '{}'
+}
+
+write_state() {  # write_state MAP-JSON — persist, or remove the file when empty
+  if [ "$1" = '{}' ]; then rm -f "$STATE"; else jq -nc --argjson s "$1" '{sessions: $s}' > "$STATE"; fi
+}
+
+# ensure_session sets SID/PID to a live session named $NAME, reusing the recorded
+# one when it's still alive (browser-go reaps idle sessions after ~10m) and
+# creating a fresh one otherwise. New ids are recorded so the UI can find them.
 ensure_session() {
-  # Reuse the recorded session when its handle is readable AND still alive
-  # (browser-go reaps idle sessions after ~10m). A missing/corrupt state file
-  # just fails the jq reads in this if-condition and falls through to a new one.
-  if SID=$(jq -re .session_id "$STATE" 2>/dev/null) && PID=$(jq -re .page_id "$STATE" 2>/dev/null) \
+  if SID=$(read_state | jq -re --arg n "$NAME" '.[$n].session_id' 2>/dev/null) \
+     && PID=$(read_state | jq -re --arg n "$NAME" '.[$n].page_id' 2>/dev/null) \
      && api "$B/sessions/$SID/pages/$PID/act" -d '{"action":"title"}' >/dev/null 2>&1; then
     return
   fi
@@ -43,7 +61,8 @@ ensure_session() {
   sp=$(api "$B/sessions" -d '{"width":1280,"height":800}')
   SID=$(jq -r .session_id <<<"$sp")
   PID=$(jq -r .page_id <<<"$sp")
-  jq -nc --arg s "$SID" --arg p "$PID" '{session_id:$s,page_id:$p}' > "$STATE"
+  write_state "$(read_state | jq -c --arg n "$NAME" --arg s "$SID" --arg p "$PID" \
+    '. + {($n): {session_id: $s, page_id: $p}}')"
 }
 
 act() { api "$B/sessions/$SID/pages/$PID/act" -d "$1"; }
@@ -60,14 +79,27 @@ case "$cmd" in
   eval)    ensure_session; act "$(jq -nc --arg e "${1:?expr}" '{action:"eval",expr:$e}')" ;;
   shot)    ensure_session; [ "${1:-}" = "full" ] && fp=true || fp=false
            api "$B/sessions/$SID/pages/$PID/screenshot?full_page=$fp" ;;
-  url)     [ -f "$STATE" ] && cat "$STATE" || echo '{}' ;;
+  sessions)
+    read_state | jq -r 'to_entries[] | "\(.key)\t\(.value.session_id)"' \
+    | while IFS="$(printf '\t')" read -r n sid; do
+        if api "$B/sessions/$sid/pages" >/dev/null 2>&1; then st=live; else st=dead; fi
+        printf '%s\t%s\n' "$n" "$st"
+      done ;;
+  url)     read_state ;;
   close)
-    # Always remove the state file, even if it's missing/corrupt or the DELETE fails.
-    if SID=$(jq -re .session_id "$STATE" 2>/dev/null); then
-      api -X DELETE "$B/sessions/$SID" >/dev/null 2>&1 || true
-    fi
-    rm -f "$STATE" ;;
+    if [ "${1:-}" = all ]; then
+      read_state | jq -r '.[].session_id' | while read -r sid; do
+        api -X DELETE "$B/sessions/$sid" >/dev/null 2>&1 || true
+      done
+      rm -f "$STATE"
+    else
+      # Always drop the entry, even if the handle is corrupt or the DELETE fails.
+      if SID=$(read_state | jq -re --arg n "$NAME" '.[$n].session_id' 2>/dev/null); then
+        api -X DELETE "$B/sessions/$SID" >/dev/null 2>&1 || true
+      fi
+      write_state "$(read_state | jq -c --arg n "$NAME" 'del(.[$n])')"
+    fi ;;
   *)
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'  # print the usage header
+    sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'  # print the usage header
     exit 2 ;;
 esac
