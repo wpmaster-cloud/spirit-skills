@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One CLI over SQLite and PostgreSQL. Backend is chosen from DB_URL:
-#   export DB_URL=sqlite:///work/app.db                 # absolute file (three slashes)
+#   export DB_URL="sqlite://$PWD/app.db"                # absolute file (three slashes)
 #   export DB_URL=sqlite:relative.db                    # relative file
 #   export DB_URL=postgres://user:pass@host:5432/dbname # PostgreSQL
 # Subcommands: query | tables | schema | import-csv | export-csv | dump | shell

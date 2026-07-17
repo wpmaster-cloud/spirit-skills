@@ -3,7 +3,7 @@
 # Gmail profile and Drive "about" endpoints. Prints the account email and Drive
 # storage so you know the refresh token works and which scopes it carries.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null || true   # workspace root
+cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null || true   # agent's folder
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 echo "==> Minting access token from refresh token..."

@@ -23,8 +23,12 @@
 # VERCEL_TOKEN natively — it is never passed as --token and never echoed.
 #
 # Node isn't baked into the agent image; it's bootstrapped via the
-# install-runtimes skill on first use. Set RUNTIME_PREFIX / VERCEL_NPM_PREFIX to
-# a persistent path (e.g. /work/tools) so the toolchain survives cold starts.
+# install-runtimes skill on first use. On the deployed image (musl + arm64) that
+# bootstrap generally FAILS — no prebuilt Node for that target — so prefer the
+# curl+jq REST path in references/api.md there. Where Node does install, set
+# RUNTIME_PREFIX / VERCEL_NPM_PREFIX to a path inside the agent's own folder
+# (e.g. "$AGENT_HOME/tools"); the default ~/.local is the server's home, outside
+# the Landlock jail, and the write is likely denied.
 
 set -euo pipefail
 

@@ -1,6 +1,6 @@
 ---
 name: ui-ux-pro-max
-description: AI-powered design intelligence — search 67 UI styles, 161 color palettes, 57 font pairings, 25 chart types, and 99 UX guidelines. Pure Python 3, no pip installs.
+description: AI-powered design intelligence — search 84 UI styles, 160 color palettes, 73 font pairings, 25 chart types, 161 product types, and 98 UX guidelines. Pure Python 3, no pip installs.
 requires: python3
 trigger-phrase: design ui, design ux, color palette, font pairing, ui style, choose a style, design system, dashboard design, landing page design, chart recommendation
 ---
@@ -27,13 +27,13 @@ python3 $SKILL/scripts/search.py "query"
 
 | Domain | What it searches | Best for |
 |--------|-----------------|----------|
-| `style` | 67 UI styles (glassmorphism, bento grid, brutalism…) | "what style fits a SaaS app?" |
-| `color` | 161 palettes by product category | "color palette for fintech" |
-| `typography` | 57 font pairings with Google Fonts imports | "font for a luxury brand" |
+| `style` | 84 UI styles (glassmorphism, bento grid, brutalism…) | "what style fits a SaaS app?" |
+| `color` | 160 palettes by product category | "color palette for fintech" |
+| `typography` | 73 font pairings with Google Fonts imports | "font for a luxury brand" |
 | `chart` | 25 chart types + library recommendations | "which chart for time-series comparison?" |
 | `landing` | Page structures + CTA strategies | "landing page layout for B2B SaaS" |
-| `ux` | 99 UX best-practices + anti-patterns | "form UX best practices" |
-| `product` | Product-type recommendations (SaaS, e-commerce…) | "UI recommendations for marketplace" |
+| `ux` | 98 UX best-practices + anti-patterns | "form UX best practices" |
+| `product` | 161 product types (SaaS, e-commerce…) | "UI recommendations for marketplace" |
 
 ## Stack-specific output
 
@@ -44,7 +44,7 @@ python3 $SKILL/scripts/search.py "dashboard" --domain style --stack react
 python3 $SKILL/scripts/search.py "color" --domain color --stack nextjs
 ```
 
-Available stacks: `html-tailwind` (default) · `react` · `nextjs` · `astro` · `vue` · `nuxtjs` · `nuxt-ui` · `svelte` · `swiftui` · `react-native` · `flutter` · `shadcn` · `jetpack-compose`
+Available stacks (16): `html-tailwind` (default) · `react` · `nextjs` · `astro` · `vue` · `nuxtjs` · `nuxt-ui` · `svelte` · `angular` · `laravel` · `threejs` · `swiftui` · `react-native` · `flutter` · `shadcn` · `jetpack-compose`
 
 ## Generate a full design system
 

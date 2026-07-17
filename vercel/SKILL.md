@@ -3,9 +3,9 @@ name: vercel
 requires: bash, curl, jq
 description: >
   Deploy web apps and sites to Vercel on the free (Hobby) tier and get back a
-  live, shareable URL. Primary path is the Vercel CLI (auto-installed via the
-  install-runtimes skill, authenticated with a token); a curl-only REST fallback
-  is documented for environments where Node can't run. Use whenever the user
+  live, shareable URL. On a deployed spirit agent the working path is the
+  curl+jq REST API (references/api.md) — the image has no Node, so the Vercel
+  CLI cannot run; on a machine with Node, scripts/vercel.sh wraps the CLI. Use whenever the user
   wants to deploy, ship, publish, host, or "put online" a website, web app,
   frontend, static site, Next.js / React / Vite / Astro / SvelteKit / Remix
   project, serverless API, or quick demo; when they ask for a public or
@@ -18,21 +18,42 @@ description: >
 
 # Vercel (deploy on the free tier)
 
-Point the skill at a folder, it returns a live URL. The CLI does the heavy
-lifting (framework detection, `.vercelignore`, file hashing, the build); this
-skill just wires up the token, makes sure the CLI exists, and surfaces the URL.
+Point the skill at a folder, it returns a live URL. Vercel builds remotely
+either way; the question is only how you talk to it — the REST API with `curl`,
+or the CLI.
 
 ```
 skills/vercel/
 ├── SKILL.md
 ├── config.env.example      # VERCEL_TOKEN (+ optional team / project pinning)
 ├── scripts/
-│   └── vercel.sh           # deploy | env | logs | ls | whoami | ensure
+│   └── vercel.sh           # deploy | env | logs | ls | whoami | ensure  (needs Node)
 └── references/
-    └── api.md              # curl+jq REST fallback (no Node) + free-tier detail
+    └── api.md              # curl+jq REST path (no Node) + free-tier detail
 ```
 
-## Quickstart
+## Which path — read this first
+
+**On a deployed spirit agent, use the REST API (`references/api.md`).** The
+image is Alpine/musl on arm64 with **no `node` and no `npm`**, so the Vercel CLI
+cannot be installed or run: `scripts/vercel.sh` will fail at its bootstrap step,
+and there is no prebuilt musl+arm64 Node to rescue it. This is not a rare edge —
+it is the deployment.
+
+The REST path needs only `curl`, `jq`, and `sha1sum` (all present). The flow is
+short: upload each file by its SHA-1 to `/v2/files`, then `POST /v13/deployments`
+with the manifest and poll for `READY`. Copy-pasteable functions for static and
+framework builds are in **`references/api.md`**.
+
+```bash
+# the whole idea, in miniature (full version in references/api.md):
+curl -fsS "https://api.vercel.com/v2/user" -H "Authorization: Bearer $VERCEL_TOKEN" \
+  | jq -r .user.username        # token sanity check, no CLI needed
+```
+
+**On a machine with Node** (a dev box, a CI runner, a glibc container),
+`scripts/vercel.sh` is nicer — it does framework detection, `.vercelignore`, and
+URL parsing for you:
 
 ```bash
 S=skills/vercel/scripts
@@ -52,7 +73,7 @@ chatter go to `stderr`), so it pipes cleanly:
 url="$(bash $S/vercel.sh deploy ./site)" && echo "live at: $url"
 ```
 
-## Subcommands (`scripts/vercel.sh`)
+## Subcommands (`scripts/vercel.sh` — Node required)
 
 | Command | What it does |
 |---|---|
@@ -134,20 +155,21 @@ the domain); deploys after that are previews unless you pass `--prod`.
 
 ## Gotchas
 
-- **Node isn't baked into the agent image.** The script bootstraps it via the
-  `install-runtimes` skill (`scripts/get.sh node`) on first use, then installs
-  the `vercel` CLI globally into a writable prefix. The one failure mode is
-  **musl + arm64** (Alpine on ARM), where a prebuilt Node musl build is often
-  absent — see `skills/install-runtimes/SKILL.md`. The deployed server image is
-  glibc, so this normally just works.
-- **Persist the toolchain.** By default Node + the CLI land in `~/.local`, which
-  may not survive a pod replacement. Set `RUNTIME_PREFIX=/work/tools` (and
-  optionally `VERCEL_NPM_PREFIX=/work/tools`) so they live on the agent's
-  writable, committable path and aren't re-downloaded every cold start.
+- **Node isn't baked into the agent image — and can't be bootstrapped there.**
+  `scripts/vercel.sh` tries the `install-runtimes` skill (`scripts/get.sh node`)
+  on first use, but the deployed image is **musl + arm64** (Alpine on ARM),
+  exactly the target where a prebuilt Node musl build is generally absent (see
+  `skills/install-runtimes/SKILL.md`). Expect the CLI path to fail on the pod;
+  use the REST API instead.
+- **Persist the toolchain** (only relevant where Node *does* install). Node + the
+  CLI default to `~/.local` — and `$HOME` is the **server's** home, outside the
+  agent's Landlock jail, so that write is likely denied outright. Point
+  `RUNTIME_PREFIX` (and optionally `VERCEL_NPM_PREFIX`) at a path **inside the
+  agent's own folder**, e.g. `RUNTIME_PREFIX="$AGENT_HOME/tools"`, which is both
+  writable and durable. There is no `/work`.
 - **Egress is HTTPS:443** to `vercel.com`, `api.vercel.com`, and
-  `registry.npmjs.org` (for the install). Behind the VPN-egress pod, both `npm`
-  and the Vercel CLI honor `HTTPS_PROXY`/`HTTP_PROXY`, which are already baked in
-  — no extra config.
+  `registry.npmjs.org` (for the install). No proxy is involved — the pod egresses
+  directly from the cluster node's IP; don't set `HTTPS_PROXY`/`HTTP_PROXY`.
 - **Thousands of files** (e.g. an un-ignored `node_modules`) can hit Vercel's
   per-deploy file limit. Add a `.vercelignore`, or deploy with
   `-- --archive=tgz` to upload one compressed blob.
@@ -155,9 +177,13 @@ the domain); deploys after that are previews unless you pass `--prod`.
   remotely (framework auto-detected). To build locally instead — useful for
   debugging a build — run `vercel build` then `deploy -- --prebuilt`.
 
-## No-Node fallback (curl + jq)
+## The REST path (curl + jq) — the one that works on the pod
 
-If Node genuinely can't run, you can still deploy with nothing but `curl`,
-`jq`, and `shasum`: hash each file, upload to `/v2/files`, then `POST
-/v13/deployments`. The full worked recipe (static and framework builds, plus
-polling for `READY`) is in **`references/api.md`**.
+Deploy with nothing but `curl`, `jq`, and `sha1sum`: hash each file, upload to
+`/v2/files`, then `POST /v13/deployments`. The full worked recipe (static and
+framework builds, plus polling for `READY`) is in **`references/api.md`**.
+
+Everything in "Free tier" and "Public URLs & deployment protection" above applies
+identically here — they're properties of Vercel, not of the client. Deployment
+protection is switched off the same way the script does it:
+`PATCH /v9/projects/<projectId>` with `{"ssoProtection":null}`.

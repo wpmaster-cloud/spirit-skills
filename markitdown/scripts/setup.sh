@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # Idempotently install the MarkItDown CLI so `markitdown` resolves on PATH.
 #
-# Strategy (first that works): uv tool -> pipx -> dedicated venv (+ ~/.local/bin shim).
+# Strategy (first that works): uv tool -> pipx -> dedicated venv (+ ~/.local/bin
+# shim). On a deployed spirit agent neither uv nor pipx is in the image, so the
+# venv branch is the one that runs — and it is the branch that works.
+#
 # Also best-effort installs optional system deps (ffmpeg, exiftool) used only for
 # audio transcription and image/audio metadata.
 #
 # Env:
 #   MARKITDOWN_EXTRAS   pip extras to install. Default: "all".
 #                       e.g. "pdf,docx,pptx,xlsx" for a smaller install.
-#   MARKITDOWN_HOME     where the venv fallback lives.
-#                       Default: $HOME/.markitdown-venv
+#   MARKITDOWN_HOME     where the venv fallback lives. Default: a .markitdown-venv
+#                       inside the agent's own folder ($AGENT_HOME), because $HOME
+#                       is the SERVER's home — outside the Landlock jail, where the
+#                       write would be denied.
 set -euo pipefail
 
 EXTRAS="${MARKITDOWN_EXTRAS:-all}"
@@ -55,7 +60,9 @@ fi
 
 # 3) dedicated venv fallback (+ shim on PATH)
 if [ "$installed" -eq 0 ]; then
-  VENV="${MARKITDOWN_HOME:-$HOME/.markitdown-venv}"
+  # Default inside the agent's folder: $HOME is the server's home and lies
+  # outside the Landlock write-jail, so a venv there would be denied.
+  VENV="${MARKITDOWN_HOME:-${AGENT_HOME:-$PWD}/.markitdown-venv}"
   log "installing into venv: $VENV"
   "$PY" -m venv "$VENV"
   "$VENV/bin/pip" install --upgrade pip >/dev/null
@@ -75,7 +82,11 @@ if [ "$installed" -eq 0 ]; then
 fi
 
 # --- optional system deps (audio transcription / EXIF metadata) -------------
-if command -v apt-get >/dev/null 2>&1; then
+# ffmpeg is already baked into the spirit agent image; exiftool is not (and there
+# is no apt there, so this block simply no-ops on Alpine). Only useful on Debian.
+if command -v ffmpeg >/dev/null 2>&1 && command -v exiftool >/dev/null 2>&1; then
+  log "optional system deps already present (ffmpeg, exiftool)"
+elif command -v apt-get >/dev/null 2>&1; then
   SUDO=""
   [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && SUDO="sudo"
   if $SUDO apt-get update -y >/dev/null 2>&1 \

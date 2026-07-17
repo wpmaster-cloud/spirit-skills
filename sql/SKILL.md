@@ -22,7 +22,7 @@ ships. It chooses the backend from a **`DB_URL`** so the same commands work
 against either:
 
 ```bash
-export DB_URL=sqlite:///work/app.db                       # SQLite (a file)
+export DB_URL="sqlite://$PWD/app.db"                      # SQLite (a file in your folder)
 export DB_URL=postgres://user:pass@host:5432/dbname       # PostgreSQL
 ```
 
@@ -37,7 +37,7 @@ skills/sql/
     └── db.sh      # query | tables | schema | import-csv | export-csv | dump | shell
 ```
 
-All paths are relative to the **workspace root**.
+All paths are relative to **your own folder** (the `run_command` CWD).
 
 ## Subcommands
 
@@ -66,15 +66,15 @@ bash $db dump backup.sql
 
 - **SQLite is a plain file.** `DB_URL=sqlite:///abs/path.db` (three slashes →
   absolute) or `sqlite:relative.db`. It writes in place, so — unlike Postgres — it
-  is **unaffected by the Landlock write-jail** as long as the file lives under the
-  agent's folder (`/work`). It's the right default for an agent's own structured
-  data.
+  is **unaffected by the Landlock jail** as long as the file lives inside the
+  agent's own folder. It's the right default for an agent's own structured data.
 - **Postgres is a server you connect to.** `db.sh` only *talks* to it; it doesn't
-  run one. Standing up a local Postgres inside the agent is fragile under the
-  write-jail (it `rename()`s across dirs → `EXDEV`) — if you truly need a local
-  server, run the agent with `SANDBOX_WRITES=0`, or point `DB_URL` at a remote
-  Postgres. See `ops/CLAUDE.md` → "Folder write-jail" and the `memory` skill,
-  which hit exactly this.
+  run one. Standing up a local Postgres inside the agent **does not work**: it
+  `rename()`s across dirs, which the Landlock jail denies → `EXDEV`. There is no
+  setting to turn that off — the server hardcodes the jail on every run it starts,
+  so point `DB_URL` at an external Postgres instead. (The pod NetworkPolicy allows
+  egress on 53/80/443 only, so reaching one on 5432 needs an operator to open the
+  port.) The `memory` skill hits exactly this.
 - **`import-csv`**: on SQLite a *new* table takes its column names from the CSV
   header; an *existing* table appends rows (header included — pre-create the table
   or drop the header first if that matters). On Postgres the table must already

@@ -1,8 +1,8 @@
 ---
 name: playwright
-requires: python3, node
+requires: curl, jq, python3
 description: >
-  Install and drive a real browser with Playwright (Python) on any machine — Linux, macOS, or Windows, on x86-64 or arm64. Use whenever a task needs actual browser automation rather than just reading a page: clicking through multi-step flows, filling and submitting forms, logging in and reusing a session, waiting on JavaScript-rendered content, capturing screenshots or PDFs, or scripting end-to-end interactions. Covers downloading/installing Playwright and its browser binaries (including the per-OS system-dependency caveats), the handy CLI one-liners (screenshot/pdf/codegen), and a scripting template. For simply turning a page into clean markdown or extracting structured data, prefer the web-extraction skill (Defuddle/Crawl4AI) instead.
+  Install and drive a real browser with Playwright (Python) on any machine — Linux, macOS, or Windows, on x86-64 or arm64 — or, on a deployed spirit agent, drive the shared browser-go service over curl. Use whenever a task needs actual browser automation rather than just reading a page: clicking through multi-step flows, filling and submitting forms, logging in and reusing a session, waiting on JavaScript-rendered content, capturing screenshots or PDFs, or scripting end-to-end interactions. Covers the browser-go HTTP API and the `browse` helper (the watchable path), downloading/installing Playwright and its browser binaries (including the per-OS system-dependency caveats), the handy CLI one-liners (screenshot/pdf/codegen), and a scripting template. For simply turning a page into clean markdown or extracting structured data, prefer the web-extraction skill instead.
 ---
 
 # Playwright
@@ -16,26 +16,35 @@ Playwright or Chromium locally** — the prebuilt browsers don't exist for that
 target. Instead there is a shared browser service, `browser-go`, that runs one
 real Chromium and exposes it over HTTP. Drive it with `curl` — no install:
 
-**No token or auth needed** — browser-go runs open inside the cluster (it's
-ClusterIP-only, so the network is the boundary). Just `curl` it; ignore any
-`$BROWSER_TOKEN` — it isn't required.
+Its address is in **`$BROWSER_URL`**, injected into every agent run — always read
+it from the environment rather than hardcoding a DNS name. Auth is **off by
+default** (browser-go is ClusterIP-only, so the network is the boundary), but
+`$BROWSER_TOKEN` is a supported config: send it if it's set — the header is
+harmless when auth is off, and required if it's ever turned on.
 
 ```bash
-B=http://browser-go.spirit-browser.svc.cluster.local
+B="${BROWSER_URL:?BROWSER_URL not set}"
+H="Authorization: Bearer ${BROWSER_TOKEN:-}"   # ignored when browser-go runs open
 
 # Just need the rendered content? One call (its own isolated context):
-curl -s $B/render -d '{"url":"https://example.com"}'   # {url,title,text,html}
-curl -s $B/shot   -d '{"url":"https://example.com","full_page":true}' -o shot.png
+curl -s -H "$H" $B/render -d '{"url":"https://example.com"}'   # {url,title,text,html}
+curl -s -H "$H" $B/shot   -d '{"url":"https://example.com","full_page":true}' -o shot.png
 
 # Multi-step flow (login, forms)? Open a session = your own isolated browser
-# context; /act runs goto|click|fill|press|select|wait|text|content|eval:
-SP=$(curl -s $B/sessions); SID=$(jq -r .session_id <<<"$SP"); PID=$(jq -r .page_id <<<"$SP")
+# context. /act runs:
+#   goto | click | fill | press | check | uncheck | select | text | content |
+#   title | wait | eval
+SP=$(curl -s -H "$H" $B/sessions); SID=$(jq -r .session_id <<<"$SP"); PID=$(jq -r .page_id <<<"$SP")
 P=$B/sessions/$SID/pages/$PID
-curl -s $P/act -d '{"action":"goto","url":"https://example.com/login"}'
-curl -s $P/act -d '{"action":"fill","selector":"#user","value":"alice"}'
-curl -s $P/act -d '{"action":"click","selector":"button[type=submit]"}'
-curl -s -X DELETE $B/sessions/$SID     # free it when done
+curl -s -H "$H" $P/act -d '{"action":"goto","url":"https://example.com/login"}'
+curl -s -H "$H" $P/act -d '{"action":"fill","selector":"#user","value":"alice"}'
+curl -s -H "$H" $P/act -d '{"action":"click","selector":"button[type=submit]"}'
+curl -s -H "$H" -X DELETE $B/sessions/$SID     # free it when done
 ```
+
+The rest of the API: `POST /pdf`, `POST /sessions/{sid}/pages`,
+`GET /sessions/{sid}/pages`, `DELETE /sessions/{sid}/pages/{pid}`,
+`GET /sessions/{sid}/pages/{pid}/screenshot`, and `GET /healthz`.
 
 Each session is isolated from other agents (own cookies/storage), so many
 agents use the one browser in parallel safely. Full API in the browser-go
@@ -81,14 +90,20 @@ These overlap (both can load a page in a browser), so pick the lighter tool when
 
 | Goal | Reach for |
 |---|---|
-| Turn a readable page into clean markdown | **web-extraction → Defuddle** |
-| Extract structured records (products, listings) at scale | **web-extraction → Crawl4AI** |
+| Turn a readable page into clean markdown | **web-extraction** |
+| Extract structured records (products, listings) at scale | **web-extraction** |
 | Click through a flow, fill a form, log in, multi-step interaction | **Playwright** |
 | Wait for a specific JS-rendered element, then act on it | **Playwright** |
 | Capture a screenshot or print a page to PDF | **Playwright** (CLI one-liner) |
 | Save a login session and reuse it across runs | **Playwright** (storage state) |
 
 Rule of thumb: if you just need the *content*, use web-extraction. If you need to *operate* the browser, use Playwright. (Crawl4AI is itself built on Playwright — this skill is for when you want direct, precise control.)
+
+**On a deployed agent this table collapses:** web-extraction's two libraries
+(Defuddle, Crawl4AI) can't be installed there — Defuddle needs npm and Crawl4AI
+needs a musl Chromium, and the image has neither. Every row above is served by
+`$BROWSER_URL` + `curl`: `/render` for content, `/act` for interaction, `/shot`
+and `/pdf` for capture.
 
 ## Install
 

@@ -29,10 +29,12 @@ skills/webhooks/
     └── discord_send.sh
 ```
 
-Paths are relative to the **workspace root**. Both scripts auto-source
-`webhooks/config.env` (override with `SLACK_CONFIG` / `DISCORD_CONFIG`); env vars
-of the same name always win. Keep `webhooks/config.env` out of git — it holds
-secret URLs/tokens.
+Paths are relative to the agent's **own folder** (`run_command`'s working
+directory). Both scripts auto-source `webhooks/config.env` (override with
+`SLACK_CONFIG` / `DISCORD_CONFIG`); env vars of the same name always win — the
+tidiest place for them is the agent's own `.env` (AgentPanel key icon), which
+`agent.sh` exports before every run. Keep `webhooks/config.env` out of git — it
+holds secret URLs/tokens.
 
 ## Slack
 

@@ -4,8 +4,8 @@ description: >
   Version control with git, and GitHub repo/PR/issue work using only git and
   the GitHub REST API over curl — no gh CLI required. Use whenever the task
   involves committing, branching, pushing, cloning, diffing, or history; or
-  creating/listing PRs, issues, and repos on GitHub. Also the way an ephemeral
-  agent persists its own work: commit and push to a remote.
+  creating/listing PRs, issues, and repos on GitHub. Use it when work needs
+  version history, review, or to be shared off-box.
 requires: git, curl
 ---
 
@@ -19,8 +19,8 @@ token in `$GITHUB_TOKEN` (a fine-grained or classic PAT).
 
 Set identity once per repo, and authenticate remotes by putting the token in
 the URL (never commit it). Identity and token come from the environment —
-`GIT_USER_NAME`, `GIT_USER_EMAIL`, and `GITHUB_TOKEN` — supplied by the deploy's
-`ops/.env` (injected into the pod env):
+`GIT_USER_NAME`, `GIT_USER_EMAIL`, and `GITHUB_TOKEN` — from the deployment env
+or your own agent `.env`. If they are missing, say so rather than improvising:
 
 ```bash
 git config user.name  "${GIT_USER_NAME:-agent}"
@@ -42,13 +42,24 @@ git log --oneline -n 10
 git diff                                      # unstaged   (--staged for staged)
 ```
 
-## Persist an ephemeral agent's work
+## What git is (and isn't) for here
 
-The container is disposable; a git remote is the backup. Typical wake-end:
+**Your folder is not ephemeral.** It lives in the vault, which sits on persistent
+storage and is synced to backup by the deployment — your files survive a restart
+without you doing anything. So git is **not** your survival mechanism, and you do
+not need to push to keep your work.
+
+Use git for what it actually gives you: **history, diffs, review, and an off-box
+copy under your control.** That makes it right for code, documents that evolve,
+and anything you want to roll back or share — and unnecessary for ordinary notes.
+
+A checkpoint at the end of a wake that produced real work:
 
 ```bash
-git add -A && git commit -m "checkpoint: $(date -u +%FT%TZ)" && git push || echo "nothing to push"
+git add -A && git commit -m "checkpoint: <what changed> $(date -u +%FT%TZ)" && git push || echo "nothing to push"
 ```
+
+Read the push output — a push that printed an error is not a backup.
 
 ## Workspace backup & recovery (`scripts/git-backup.sh`)
 

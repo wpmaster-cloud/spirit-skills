@@ -8,7 +8,7 @@ description: >
   when X publishes something new", track a podcast or YouTube channel feed, poll a
   site for updates on a schedule, or build a digest of recent feed items. Pairs
   with the `cron` skill for a standing watch and any comms skill (`telegram`,
-  `webhooks`, `email`, `whatsapp`) to push the new items. Trigger phrases:
+  `webhooks`, `whatsapp`, `google`) to push the new items. Trigger phrases:
   "rss", "atom feed", "monitor this feed", "watch for new posts", "notify me when
   <site> publishes", "new releases", "changelog updates", "subscribe to", "poll
   this feed", "feed digest".
@@ -28,9 +28,9 @@ skills/rss-monitor/
 └── scripts/feed.py
 ```
 
-Paths are relative to the **workspace root**. State is written under
-`rss/state/` (keep it under `/work` so it survives the write-jail and commits with
-the agent).
+Paths are relative to the agent's **own folder** (`run_command`'s working
+directory, and its read/write jail). State is written under `rss/state/` — inside
+the folder, so it's writable and persists across runs (override with `--state`).
 
 ## Usage
 
@@ -62,19 +62,31 @@ seen, so the next run won't repeat them — mirror of `telegram`'s `tg_read.sh`.
 reports everything (nothing is seen yet) — run once with `--peek`/`--reset` first
 if you only want *future* items.
 
-## The standing-watch pattern (cron + a comms skill)
+## The standing-watch pattern (a scheduled wake + a comms skill)
 
-Give the agent a wake on a schedule (the **cron** skill, or the wake-loop in
-`ops/agent.yaml`). Each firing checks the feed and pushes anything new:
+Give the agent a wake on a schedule by dropping a job file in `_cronjobs/` in its
+own folder — **not `crontab`**, which isn't available here (see the **cron**
+skill for the full format). Each firing checks the feed and pushes anything new:
 
-```cron
-*/15 * * * * cd /abs/path/agents/feed-watcher && ./agent.sh "Wake: run python3 skills/rss-monitor/scripts/feed.py https://example.com/feed.xml. For each new item, send a one-line Slack message with bash skills/webhooks/scripts/slack_send.sh '<title> — <link>'. If there are none, reply exactly: idle." >> cron.log 2>&1 # spirit-agent:feed-watch
+```bash
+mkdir -p _cronjobs
+cat > _cronjobs/feed-watch.json <<'JSON'
+{
+  "id": "feed-watch",
+  "schedule": "*/15 * * * *",
+  "session": "session.jsonl",
+  "prompt": "Wake: run python3 skills/rss-monitor/scripts/feed.py https://example.com/feed.xml. For each new item, send a one-line Slack message with bash skills/webhooks/scripts/slack_send.sh '<title> — <link>'. If there are none, reply exactly: idle.",
+  "ephemeral": true,
+  "enabled": true
+}
+JSON
 ```
 
-Because the agent has **one session**, the watcher accumulates context naturally
-and `compact_session` keeps it bounded. Bake the standing instructions (which
+`ephemeral: true` suits a watcher: the feed's own state file (`rss/state/`) is
+what remembers which items are new, so each wake can start from a clean context
+instead of growing a session forever. Bake the standing instructions (which
 feeds, how to format, "never repeat an item") into the system prompt so the
-per-wake message stays short — see the `agent-workshop` skill.
+per-wake prompt stays short — see the `agent-workshop` skill.
 
 ## Notes
 
@@ -85,5 +97,6 @@ per-wake message stays short — see the `agent-workshop` skill.
   feeds without guids still de-duplicate sensibly.
 - The state file caps stored ids (most-recent 2000) so it can't grow without
   bound. It's plain JSON under `rss/state/` — safe to commit, inspect, or delete.
-- Network egress follows the agent's normal forced-VPN path; a feed behind an
-  IP-allowlist may not be reachable (check with **net-diag**).
+- Egress is direct from the cluster node's IP — there is no VPN or proxy in the
+  path. A feed behind an IP-allowlist needs that IP allowed (check with
+  **net-diag**).

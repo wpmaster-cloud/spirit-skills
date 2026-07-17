@@ -50,8 +50,9 @@ API looks like, how `--days` maps onto it, and what the error codes mean.
 - `--days` → `time_range`: `day` / `week` / `month` / `year`.
 - Mapping: `results[].title/url/content` → `title/url/snippet`; results are
   sliced to `-n` client-side (SearXNG paginates rather than counts).
-- From a deployed pod, remember the egress NetworkPolicy: an instance on a
-  port other than 443/80 needs that port added to `ops/agent.yaml`.
+- Egress is unrestricted — an instance on a non-standard port needs no extra
+  config. If it is unreachable, the cause is the instance or the network path,
+  not a policy on this side; probe it with the `net-diag` skill.
 
 ## DuckDuckGo (keyless fallback)
 

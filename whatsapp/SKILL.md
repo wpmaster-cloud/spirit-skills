@@ -38,7 +38,8 @@ skills/whatsapp/
 ```
 
 All commands below assume the agent's `run_command`, whose working directory is
-the **workspace root**, so paths are written relative to it (`skills/whatsapp/...`).
+the agent's **own folder** (also its read/write jail), so paths are written
+relative to it (`skills/whatsapp/...` — where you unzipped this skill).
 
 ## 1. One-time setup
 
@@ -50,18 +51,21 @@ lift this). The console shows three values you need: **idInstance**,
 
 **b. Store credentials.** Two options (pick one):
 
-- **Env vars (recommended, secret-safe).** Put these in the environment the
-  agent process starts with — the shell/cron line that launches `agent.sh`, or
-  the pod's Secret-backed `env:` for a containerized agent (the runtime does
-  **not** read a `.env` file):
+- **The agent's own `.env` (recommended, secret-safe).** `agent.sh` loads
+  `.env` from the agent's own folder before every run and exports it, so
+  `run_command` children inherit it and the **token never appears in the
+  transcript**. Edit it from the AgentPanel's key icon, or write the file
+  directly:
   ```
   GREENAPI_ID_INSTANCE=1101000001
   GREENAPI_API_TOKEN=d75b3a66374942c5b3c019c698abc2067e151558acbd412345
   WHATSAPP_DEFAULT_CHAT_ID=                        # optional default recipient
   # GREENAPI_API_URL is OPTIONAL — see the note on apiUrl below.
   ```
-  `run_command` children inherit the agent's environment, so the **token never
-  appears in the transcript**.
+  One `KEY=VALUE` per line. It is parsed **literally, not sourced** — there is
+  no variable expansion, so a line like `PATH=$PATH:/x` stores that string
+  verbatim and clobbers `PATH`. (The upside: a token containing `$` or
+  backticks survives intact.)
 
 - **Config file.** Copy the template and fill it in:
   ```bash
@@ -154,23 +158,36 @@ since the queue is FIFO it always shows the same oldest item. Note the queue
 also receives *your own* outgoing sends (`outgoingAPIMessageReceived`) and
 delivery statuses — `wa_read.sh` labels them `out` / `--` so you can ignore them.
 
-## 4. A two-way conversation (the cron wake pattern)
+## 4. A two-way conversation (the scheduled wake pattern)
 
 To make the agent an actual WhatsApp assistant that reads incoming messages and
-replies on a schedule, give it a standing wake (see the **cron** skill on a
-host, or the wake-loop `command:` in `ops/agent.yaml` for a container). Every
-firing is a one-shot run against the agent's **one session**, so the
-conversation accumulates naturally and `compact_session` keeps it bounded.
+replies on a schedule, give it a standing wake by dropping a job file in
+`_cronjobs/` in your own folder. **Never use `crontab`** — it isn't available
+here and nothing would fire it; see the **cron** skill for the full format.
 
-```cron
-* * * * * cd /abs/path/agents/whatsapp-bot && ./agent.sh "Wake: check WhatsApp by running bash skills/whatsapp/scripts/wa_read.sh. For each new incoming message directed at you, write a helpful reply and send it with bash skills/whatsapp/scripts/wa_send.sh --chat <CHAT_ID> '...'. Ignore 'out' and '--' lines (your own sends and statuses). If there are no new messages, reply exactly: idle." >> cron.log 2>&1 # spirit-agent:whatsapp-poll
+```bash
+mkdir -p _cronjobs
+cat > _cronjobs/whatsapp-poll.json <<'JSON'
+{
+  "id": "whatsapp-poll",
+  "schedule": "* * * * *",
+  "session": "session.jsonl",
+  "prompt": "Wake: check WhatsApp by running bash skills/whatsapp/scripts/wa_read.sh. For each new incoming message directed at you, write a helpful reply and send it with bash skills/whatsapp/scripts/wa_send.sh --chat <CHAT_ID> '...'. Ignore 'out' and '--' lines (your own sends and statuses). If there are no new messages, reply exactly: idle.",
+  "ephemeral": false,
+  "enabled": true
+}
+JSON
 ```
 
 Mechanics that make this work:
-- Each firing appends the wake text as a user message and runs one turn loop;
+- `ephemeral: false` is the point here: every firing runs against the **same**
+  session, so the conversation accumulates naturally and the `compact_context`
+  tool keeps it bounded.
+- Each firing queues the `prompt` as a user message and runs one turn loop;
   a wake that lands mid-run exits 75 harmlessly (the next one catches up).
+- Wakes fire only while the spirit server is running **and unlocked**.
 - Bake the standing instructions (role, reply style, "never message anyone
-  unprompted") into the agent's **system prompt** so the per-wake message stays
+  unprompted") into the agent's **system prompt** so the per-wake prompt stays
   short — see skills/agent-workshop for authoring a session.
 - A typical firing is ~3 model calls: read → (reply if needed) → finish.
 

@@ -85,19 +85,37 @@ python3 skills/data-analysis/scripts/chart.py sales.csv --x month --y revenue --
 python3 skills/data-analysis/scripts/chart.py sales.csv --x region --y sales --type bar
 python3 skills/data-analysis/scripts/chart.py values.csv --y score --type hist --bins 30
 ```
-Writes a PNG (default `chart.png`). Needs matplotlib (`pip install matplotlib`); the
-script tells you if it's missing.
+Writes a PNG (default `chart.png`). Needs matplotlib, which is not in the image —
+install it into a venv (see below) and run the script with `.venv/bin/python`;
+the script tells you if it's missing.
 
 ## Installing the optional tools
 
-The profiler needs nothing. For the rest:
+The profiler needs nothing — `python3` is already in the image, and `profile.py`
+is pure stdlib. Start there and you may never need to install anything.
+
+**DuckDB** is not baked in; fetch the CLI (a single static binary):
 ```bash
 curl https://install.duckdb.org | sh     # DuckDB CLI (or: brew install duckdb)
-pip install duckdb pandas pyarrow matplotlib openpyxl
 ```
+
+**Python packages need a venv.** A bare `pip install` fails on this image with
+`error: externally-managed-environment` (PEP 668) — the system Python is
+protected. Create a venv **inside your own folder** and run everything through
+it:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install duckdb pandas pyarrow matplotlib openpyxl
+.venv/bin/python skills/data-analysis/scripts/chart.py data.csv --y score --type hist
+```
+
+Invoke scripts with `.venv/bin/python` (or `. .venv/bin/activate` first).
+Keep the venv in the agent's folder, not `~` — `$HOME` is the server's home and
+sits outside the Landlock jail.
+
 `openpyxl` lets the profiler read `.xlsx`; `pyarrow` lets pandas/DuckDB read
-Parquet. No `python3`/`pip` on the machine at all? Get one with the
-**install-runtimes** skill (`uv`-managed Python works on Alpine too).
+Parquet.
 
 ## Tips & gotchas
 

@@ -16,7 +16,7 @@ set -euo pipefail
 # agent process, which keeps the token out of the transcript). Only if the
 # token is NOT already set do we source a config file:
 #   1. $WA_CONFIG                (explicit path, if you set it)
-#   2. whatsapp/config.env       (relative to the workspace root = run_command cwd)
+#   2. whatsapp/config.env       (relative to the agent's folder = run_command cwd)
 #   3. skills/whatsapp/config.env (next to this skill)
 if [ -z "${GREENAPI_API_TOKEN:-}" ]; then
   for _cfg in "${WA_CONFIG:-}" "whatsapp/config.env" "skills/whatsapp/config.env"; do

@@ -12,7 +12,8 @@ if [ -f "$_cfg" ]; then set -a; . "$_cfg"; set +a; fi
 : "${SSH_HOST:=}"
 : "${SSH_PORT:=22}"
 : "${SSH_KEY:=}"
-: "${SSH_KNOWN_HOSTS:=${HOME:-.}/.ssh/known_hosts}"   # must be writable → keep under /work
+: "${SSH_KNOWN_HOSTS:=.ssh/known_hosts}"   # relative to the agent's own folder: $HOME
+                                           # is the server's home, outside the jail
 : "${SSH_STRICT:=accept-new}"                          # accept-new | yes | no
 : "${SSH_CONNECT_TIMEOUT:=15}"
 

@@ -77,15 +77,24 @@ PY
     dest="${1:-.}"; mkdir -p "$dest"
     case "$ar" in
       *.zip) unzip -o "$ar" -d "$dest";;
-      *.gz)  [ "${ar%.tar.gz}" = "$ar" ] && [ "${ar%.tgz}" = "$ar" ] \
-               && gzip -dc "$ar" > "$dest/$(basename "${ar%.gz}")" \
-               || gzip -dc "$ar" | tar -xf - -C "$dest";;
-      *.xz)  [ "${ar%.tar.xz}" = "$ar" ] && [ "${ar%.txz}" = "$ar" ] \
-               && xz -dc "$ar" > "$dest/$(basename "${ar%.xz}")" \
-               || xz -dc "$ar" | tar -xf - -C "$dest";;
-      *.zst) [ "${ar%.tar.zst}" = "$ar" ] && [ "${ar%.tzst}" = "$ar" ] \
-               && zstd -dc "$ar" > "$dest/$(basename "${ar%.zst}")" \
-               || zstd -dc "$ar" | tar -xf - -C "$dest";;
+      # A raw single-file .gz/.xz/.zst decompresses to a file; a .tar.gz/.tgz
+      # (etc.) streams into tar. Must be if/else, never `test && a || b` — with
+      # that form a *failing* decompression would also run the untar branch.
+      *.gz)  if [ "${ar%.tar.gz}" = "$ar" ] && [ "${ar%.tgz}" = "$ar" ]; then
+               gzip -dc "$ar" > "$dest/$(basename "${ar%.gz}")"
+             else
+               gzip -dc "$ar" | tar -xf - -C "$dest"
+             fi;;
+      *.xz)  if [ "${ar%.tar.xz}" = "$ar" ] && [ "${ar%.txz}" = "$ar" ]; then
+               xz -dc "$ar" > "$dest/$(basename "${ar%.xz}")"
+             else
+               xz -dc "$ar" | tar -xf - -C "$dest"
+             fi;;
+      *.zst) if [ "${ar%.tar.zst}" = "$ar" ] && [ "${ar%.tzst}" = "$ar" ]; then
+               zstd -dc "$ar" > "$dest/$(basename "${ar%.zst}")"
+             else
+               zstd -dc "$ar" | tar -xf - -C "$dest"
+             fi;;
       *.tar) tar -xf "$ar" -C "$dest";;
       *) case "$(file -b --mime-type "$ar" 2>/dev/null)" in
            application/zip) unzip -o "$ar" -d "$dest";;

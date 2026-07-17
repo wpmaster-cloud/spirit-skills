@@ -1,6 +1,6 @@
 ---
 name: net-diag
-requires: bind-tools, openssl, curl
+requires: dig, openssl, curl
 description: >
   Network, DNS, and TLS diagnostics from the agent using the baked dig/host/nslookup
   (bind-tools), openssl, and curl. Use whenever the user wants to debug connectivity
@@ -8,8 +8,8 @@ description: >
   a TLS/SSL certificate or its expiry, test whether a host:port is reachable, see what
   public/egress IP the agent's traffic exits from, trace why a request fails, or
   generally answer "is X up / resolvable / reachable / does its cert expire soon".
-  Also the go-to for verifying the agent's own egress (it exits a rotating NordVPN
-  proxy pool, not the node IP). Trigger phrases: "dns", "dig", "nslookup", "resolve",
+  Also the go-to for verifying the agent's own egress (it exits the cluster node's
+  IP). Trigger phrases: "dns", "dig", "nslookup", "resolve",
   "is <host> up", "can you reach", "port open", "ssl certificate", "tls", "cert
   expiry", "https not working", "dns propagation", "what's my ip", "egress ip",
   "check connectivity", "why can't I connect".
@@ -27,11 +27,11 @@ skills/net-diag/
 └── scripts/
     ├── dns.sh      # record lookups + cross-resolver propagation (dig)
     ├── tls.sh      # certificate subject/issuer/SAN/expiry + protocol (openssl)
-    ├── port.sh     # TCP reachability without netcat (bash /dev/tcp)
+    ├── port.sh     # TCP reachability (bash /dev/tcp — no extra deps)
     └── egress.sh   # the agent's outbound public IP + geo (curl)
 ```
 
-Paths are relative to the **workspace root** (the `run_command` CWD).
+Paths are relative to **your own folder** (the `run_command` CWD).
 
 ## DNS — `dns.sh`
 
@@ -63,7 +63,7 @@ this hostname".
 ## Reachability — `port.sh`
 
 ```bash
-# check one or more TCP ports (no nc in the image — uses bash /dev/tcp):
+# check one or more TCP ports (uses bash /dev/tcp — no extra deps):
 bash skills/net-diag/scripts/port.sh example.com 22 80 443
 # PORT_TIMEOUT=2 bash ... to shorten the per-port wait
 ```
@@ -72,6 +72,13 @@ Each line is `host:port  open` or `host:port  closed/filtered`. This tests the T
 handshake only — "open" means something is listening and reachable *from the
 agent's current egress*, not that the service behind it is healthy.
 
+> **Read `closed/filtered` carefully: it is usually the cluster, not the host.**
+> The pod's NetworkPolicy (`ops/spirit.yaml`) permits egress on **53, 80 and 443
+> only**. Every other port — 22, 5432, 6379, … — is dropped on the way out, so it
+> reports `closed/filtered` no matter how healthy the remote service is. A probe of
+> 80/443 is a real answer; a probe of anything else mostly measures the
+> NetworkPolicy. Opening a port is an operator change to that manifest.
+
 ## Egress IP — `egress.sh`
 
 ```bash
@@ -79,18 +86,17 @@ bash skills/net-diag/scripts/egress.sh
 ```
 
 Shows the public IP the world sees as the source of the agent's traffic, plus org
-and rough location. On a **VPN-enabled** agent (the `:vpn` image) this should be a
-**NordVPN** address — the in-image OpenVPN tunnel carries all egress — **not** the
-host/node IP. The exit IP is stable per pod and changes only when the pod re-dials
-(it does not vary per connection). Pass `NODE_IP=<host ip>` to have the script warn
-when egress matches the host (i.e. the tunnel is down). A `connect()` that fails
-outright usually means the tunnel is down — the killswitch fails closed (see
-`ops/CLAUDE.md` → "Egress VPN").
+and rough location. There is **no VPN, proxy pool, or tunnel** in front of the
+agent: traffic exits as the **cluster node's own public IP**, so seeing the node's
+address is the *correct* result, not a fault. It is stable for as long as the pod
+stays on that node — which is what makes it the address to hand a remote admin for
+an IP allowlist. If `egress.sh` fails to connect at all, the path itself is broken
+(DNS, or the NetworkPolicy above), not a dropped tunnel.
 
 ## Notes
 
 - These are read-only probes; nothing here changes remote state.
-- `dig`/`openssl` honour the same forced egress as everything else, so a result is
-  always "as seen from the agent's current exit IP" — relevant when DNS is
-  split-horizon or a firewall is source-IP aware.
+- Every answer is "as seen from inside the cluster" — resolved by the pod's DNS,
+  sourced from the node's egress IP. That matters when DNS is split-horizon or a
+  remote firewall is source-IP aware.
 - For driving a remote host (not just probing it), use the **remote-ops** skill.

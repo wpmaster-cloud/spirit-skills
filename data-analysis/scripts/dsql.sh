@@ -40,7 +40,8 @@ if ! command -v duckdb >/dev/null 2>&1; then
   echo "duckdb is not installed. Install one of:" >&2
   echo "  curl https://install.duckdb.org | sh    # standalone CLI (recommended)" >&2
   echo "  brew install duckdb                      # macOS" >&2
-  echo "  pip install duckdb                       # Python module (use via python3)" >&2
+  echo "  python3 -m venv .venv && .venv/bin/pip install duckdb   # Python module;" >&2
+  echo "      a bare 'pip install' fails with externally-managed-environment (PEP 668)" >&2
   exit 127
 fi
 

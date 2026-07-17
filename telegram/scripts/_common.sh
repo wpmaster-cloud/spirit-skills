@@ -18,7 +18,7 @@ set -euo pipefail
 # token is NOT already set do we source a config file, so it can fill the gap
 # without restarting the agent's environment.
 #   1. $TG_CONFIG               (explicit path, if you set it)
-#   2. telegram/config.env      (relative to the workspace root = run_command cwd)
+#   2. telegram/config.env      (relative to the agent's folder = run_command cwd)
 #   3. skills/telegram/config.env (next to this skill)
 if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
   for _cfg in "${TG_CONFIG:-}" "telegram/config.env" "skills/telegram/config.env"; do
@@ -37,7 +37,7 @@ TG_API_BASE="${TG_API_BASE:-https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}}"
 
 # --- state location --------------------------------------------------------
 # Where the getUpdates offset is remembered. Defaults to telegram/ under the
-# workspace root; override with TG_STATE_DIR.
+# agent's folder; override with TG_STATE_DIR.
 TG_STATE_DIR="${TG_STATE_DIR:-telegram}"
 mkdir -p "$TG_STATE_DIR"
 TG_OFFSET_FILE="${TG_OFFSET_FILE:-$TG_STATE_DIR/offset}"

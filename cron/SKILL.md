@@ -1,164 +1,173 @@
 ---
 name: cron
 description: >
-  Schedule recurring or one-time work with cron — including waking yourself or
-  other agents on a schedule. Use whenever the user says "every day/hour",
-  "periodically", "keep checking", "remind me", "schedule", "at 9am", or wants
-  an agent to have a standing task that survives between conversations. Covers
-  reading/adding/removing crontab entries safely, the agent wake pattern,
-  self-removing one-time jobs, and cron's environment gotchas.
-requires: crontab
+  Schedule recurring or one-time work — waking yourself on a schedule by writing
+  a cron definition file. Use whenever the user says "every day/hour",
+  "periodically", "keep checking", "remind me", "schedule", "at 9am", or wants a
+  standing task that survives between conversations. Covers the _cronjobs/ JSON
+  format, ephemeral vs. continuing sessions, staggering, and why crontab is not
+  the answer here.
+requires: jq
 ---
 
-# Cron
+# Scheduling (cron)
 
-Two worlds, pick by where you are:
+**You schedule yourself by writing a file. Never use `crontab`.**
 
-- **On a host** (macOS, a Linux server) → `crontab`. The rest of this skill.
-- **In a container / pod** (the usual spirit deployment) → **there is no cron
-  daemon, and `crontab` cannot run** as the non-root agent user: busybox
-  `crontab` needs to be setuid root, privilege escalation is blocked, and
-  nothing would fire the entry anyway. Don't fight it — use **container loop
-  mode** below. (Symptom that you're here: `crontab: must be suid to work
-  properly`.)
+`crontab` is unavailable here and cannot be made to work: there is no cron
+daemon in the container, and busybox `crontab` needs to be setuid root while
+privilege escalation is blocked. (Symptom: `crontab: must be suid to work
+properly`.) Nothing would fire the entry even if it saved.
 
-## Rules
+Instead, the spirit server runs an **in-process scheduler** that ticks once a
+minute and fires any due job it finds. You opt in by dropping a JSON file in
+`_cronjobs/` in your own folder — no API call, no privileges, no daemon.
 
-- **Tag every entry you create** with a trailing marker comment
-  `# spirit-agent:<job-name>` so it can be listed and removed exactly, without
-  touching entries owned by the user or other tools.
-- Never replace the whole crontab blind: always start from `crontab -l` and
-  filter, so existing entries survive.
-- Cron runs with a minimal environment: no PATH from your shell, no exported
-  keys. Use absolute paths and `cd` into the agent folder; the API key must be
-  reachable (`LLM_API_KEY` in the environment, or set it inline in the cron
-  line).
-
-## Recipes
+## The one recipe
 
 ```bash
-# List everything / only your entries
-crontab -l 2>/dev/null
-crontab -l 2>/dev/null | grep -F '# spirit-agent:'
-
-# Add an entry (append, keep the rest)
-( crontab -l 2>/dev/null
-  printf '%s\n' '*/15 * * * * cd /abs/path/agents/researcher && ./agent.sh "Wake: continue your standing task. If nothing pending, reply exactly: idle." >> cron.log 2>&1 # spirit-agent:researcher-wake'
-) | crontab -
-
-# Remove one of your entries by its marker
-crontab -l 2>/dev/null | grep -vF '# spirit-agent:researcher-wake' | crontab -
-
-# One-time job: the line removes itself after running
-( crontab -l 2>/dev/null
-  printf '%s\n' '30 9 14 6 * cd /abs/path && ./agent.sh "send the report" >> cron.log 2>&1; crontab -l | grep -vF "# spirit-agent:once-report" | crontab - # spirit-agent:once-report'
-) | crontab -
+mkdir -p _cronjobs
+cat > _cronjobs/daily-review.json <<'JSON'
+{
+  "id": "daily-review",
+  "schedule": "0 7 * * *",
+  "session": "session.jsonl",
+  "prompt": "Review yesterday's changes and write a summary note.",
+  "ephemeral": true,
+  "enabled": true
+}
+JSON
 ```
 
-## Agent wake pattern
+That's the whole mechanism. The scheduler picks it up on the next tick.
 
-- A wake is just a one-shot run: `cd <agent folder> && ./agent.sh "Wake: ..."`.
-- If a wake fires while the agent is already running, it exits 75 (session
-  busy) — harmless; the next wake catches up. Queued messages in the session
-  are processed on whichever run comes next.
-- Stagger fleets so they do not hit the API at the same instant: `*/15` for
-  one agent, `2-59/15` for the next, `4-59/15` after that.
-- Keep wake prompts cheap: the agent's system prompt should say to reply
-  exactly `idle` when nothing is pending, so an idle wake costs one model call.
+## The fields
+
+| Field | Meaning |
+|---|---|
+| `id` | Job identity. **Match the filename** (`<id>.json`) — the UI and the delete path key off it. |
+| `schedule` | Standard **5-field** cron (`min hour dom month dow`). Minute granularity is the floor. |
+| `session` | Which conversation to wake, e.g. `session.jsonl`. A **bare filename** — the server resolves it under `_sessions/` itself. |
+| `prompt` | Queued as a user message each run. **Required for the run to do anything** — a wake with nothing pending is a no-op. |
+| `ephemeral` | `true` = reset the session to its seed snapshot each run (fresh context, no memory growth). `false` = one conversation that accumulates. |
+| `enabled` | `false` pauses the job without deleting it. |
+| `label` | Optional human name for the UI. |
+
+Choosing `ephemeral`:
+
+- **`true` for repeatable chores** — a digest, a health check, a poll. Every run
+  starts identical and clean, and the session never grows without bound. This is
+  what you want most of the time.
+- **`false` for a genuine ongoing thread** where each run should remember the
+  last. Watch the size; it grows forever otherwise.
+
+## What actually happens on a tick
+
+1. The scheduler scans the vault for `_cronjobs/*.json` once a minute.
+2. For each **enabled** job whose expression matches the current minute:
+   ephemeral jobs get their session reset to its seed snapshot, a non-empty
+   `prompt` is appended as a user message, then `agent.sh --run` is exec'd
+   detached in your folder.
+3. Double-fires are guarded (keyed by job file + minute), and the session lock
+   prevents overlap: if the session is already running, the job is skipped this
+   tick rather than stacking.
+
+## The honest limits — read before promising a schedule
+
+- **The server must be running AND unlocked.** The LLM key is captured at unlock,
+  so a locked vault fires nothing. After any restart, **nothing runs until a
+  human unlocks it**. A cron job is best-effort, not a guarantee — don't promise
+  a scheduled action will definitely have happened; check that it did.
+- **It is not a timer you can trust to the second.** Minute granularity, and a
+  busy session skips its tick.
+- **A silent job is a lie you tell yourself.** If the work matters, have the
+  prompt report somewhere you'll see (a note, the `telegram`/`webhooks` skill)
+  on failure — not just on success.
+
+## Managing jobs
+
+```bash
+ls _cronjobs/*.json                                   # what am I signed up for?
+jq -r '"\(.id): \(.schedule) enabled=\(.enabled) ephemeral=\(.ephemeral)"' _cronjobs/*.json
+
+jq '.enabled = false' _cronjobs/daily-review.json > .t && mv .t _cronjobs/daily-review.json  # pause
+rm _cronjobs/daily-review.json                        # remove for good
+```
+
+The app's clock icon is the same thing with a UI (it also drops the job's seed
+snapshot when it deletes). Editing the file by hand is fully supported.
+
+## Wake prompts that don't waste money
+
+This runs unattended, possibly hundreds of times. Make it **cheap when idle and
+loud when broken**:
+
+- Keep the prompt idempotent — it will run again, and a job that appends
+  something every tick creates a mess by Friday.
+- Instruct an early exit: "…if nothing is pending, reply exactly: `idle`." An
+  idle wake should cost one model call, not twenty.
+- **Stagger** multiple jobs so they don't all hit the API on the same minute:
+  `*/15` for one, `2-59/15` for the next, `4-59/15` after that.
+- `0 7 * * *` fires at 07:00 **UTC** unless the container says otherwise —
+  confirm with `date -u` rather than assuming local time.
+
+## Don't hand-roll a polling daemon
+
+It is tempting to write `while true; do …; sleep 60; done &` when a schedule
+seems not to fire. Don't:
+
+- It **dies on every pod restart** and never comes back — nothing supervises it,
+  and it isn't in the deployment. It stops silently and you keep believing it runs.
+- It is **invisible**: not in `_cronjobs/`, not in the UI, not in any list. The
+  next person to look (including future-you) has no idea it exists.
+- Its memory counts against the **server's** memory limit, because your commands
+  run inside the server's pod. A loop that spawns real work can OOM the whole app.
+
+If a job seems not to fire, the answer is almost always that **the vault is
+locked** (see the limits above) or `enabled` is `false` — not that the scheduler
+is broken. Check those first:
+
+```bash
+jq -r '.enabled' _cronjobs/<id>.json   # is it even on?
+tail -n 20 _logs/cron.log 2>/dev/null  # did it fire and fail?
+tail -n 40 _logs/agent.log             # what did the run actually do?
+```
 
 ## Memory maintenance schedule (notes / memory skills)
 
 The durable-memory skills are built to be *maintained* on a schedule, not just
-written to — otherwise the store rots into an unsearchable junk drawer. Recommended
-cadence (tune to the agent):
+written to — otherwise the store rots into an unsearchable junk drawer.
 
 | Skill | Distill (1–2×/day) | Hygiene (weekly) |
 |-------|--------------------|------------------|
 | `notes`  | `notes.sh reflect` — recent events → durable notes + `MEMORY.md` | `notes.sh audit` → **defrag with judgment** (split/merge/prune, *archive never delete*) |
 | `memory` | `memory.sh consolidate` — episodes → facts | `memory.sh forget` — decay-prune low-value memories |
 
-**`reflect`/`consolidate` and `forget` are plain script calls** (they do the LLM
-distill themselves), so a direct cron line / loop tick works — but they need the
-agent's `BASE_URL`/`LLM_API_KEY` in env. **Defrag is reasoning-heavy** (it splits
-and merges with judgment), so drive it through an *agent wake*, not a bare script
-call.
+Both run as agent wakes here — the prompt is the interface:
 
 ```bash
-# Host crontab — distill twice daily, hygiene weekly (env-key must be reachable):
-0 */12 * * * cd /abs/agent && NOTES_DIR=$PWD/notes bash skills/notes/scripts/notes.sh reflect >> logs/mem.log 2>&1 # spirit-agent:notes-reflect
-0 4 * * 0    cd /abs/agent && ./agent.sh "Maintenance: run skills/notes audit, then defrag with judgment (archive, never delete), and commit the vault." >> logs/mem.log 2>&1 # spirit-agent:notes-defrag
+cat > _cronjobs/notes-reflect.json <<'JSON'
+{
+  "id": "notes-reflect", "schedule": "0 */12 * * *", "session": "session.jsonl",
+  "prompt": "Memory upkeep: run `bash skills/notes/scripts/notes.sh reflect` to distill recent events into durable notes, then reply with one status line.",
+  "ephemeral": true, "enabled": true
+}
+JSON
 ```
 
-In a **pod** (no crontab — use the container loop below or `ops/agent.yaml`'s
-wake-loop): fold a maintenance tick into the loop, e.g. every 12h run
-`notes.sh reflect`, and once a week fire a defrag *wake* so the agent does the
-judgment work. Always **commit + push the vault** after maintenance so it
-survives the ephemeral pod.
-
-## Container loop mode (no crontab)
-
-In a pod the durable scheduler is a `while true; … sleep N` loop, not crontab.
-Two things make it work *correctly* — get both or it bites you:
-
-1. **Survive restarts.** A loop you launch as a detached child of a run dies
-   with that run and never comes back on the next pod start (the pod's command
-   is `tail -f /dev/null`, which doesn't relaunch it). For a loop that truly
-   persists, put it in the pod's `command:` (see the commented wake-loop in
-   `ops/agent.yaml`) so the container runtime supervises and restarts it. A loop
-   started by hand inside a running pod is **best-effort until the next restart**
-   — say so when you set one up.
-2. **Register it so the control plane can see it.** The control plane only knows
-   the one pid holding the session lock (the in-flight run); a standing loop is
-   otherwise invisible — you can't see it, can't tell it's accidentally doubled,
-   can't stop it from the UI. Drop a pidfile at
-   `<agent>/.admin/daemons/<name>.pid` (first line: the pid; optional second
-   line: a human label). The UI lists every registered daemon, flags dead ones,
-   and gives a Stop button.
-
-Self-registering, single-instance, signal-clean loop — the pattern to copy:
+**Defrag is reasoning-heavy** (it splits and merges with judgment), so drive it
+through a wake with a real prompt rather than a bare script call:
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")/.."                 # the agent folder
-name="telegram-poll"                    # one word; becomes the daemon's UI name
-reg=".admin/daemons/$name.pid"
-mkdir -p .admin/daemons logs
-
-# single-instance guard: if a live pid is already registered, bow out (this is
-# what stops the accidental double loop)
-if [ -f "$reg" ] && kill -0 "$(head -1 "$reg" 2>/dev/null)" 2>/dev/null; then
-  exit 0
-fi
-printf '%s\n%s\n' "$$" "bash bin/${name}.sh — every 5m" > "$reg"
-trap 'rm -f "$reg"' EXIT INT TERM       # de-register on exit, including SIGTERM
-
-while true; do
-  ./bin/${name}_wake.sh >> "logs/$name.log" 2>&1 || true
-  sleep 300 & wait $!                    # background sleep + wait, so a SIGTERM
-done                                     # from the UI's Stop fires the trap NOW,
-                                         # not after the current sleep ends
+cat > _cronjobs/notes-defrag.json <<'JSON'
+{
+  "id": "notes-defrag", "schedule": "0 4 * * 0", "session": "session.jsonl",
+  "prompt": "Weekly memory hygiene: run skills/notes audit, then defrag with judgment (archive, never delete). Report what you merged, split, or archived.",
+  "ephemeral": true, "enabled": true
+}
+JSON
 ```
 
-- `sleep 300 & wait $!` (not a bare `sleep 300`) is what makes the UI's **Stop**
-  prompt: a trap can't interrupt a foreground `sleep`, so a bare sleep would
-  ignore SIGTERM for up to the whole interval.
-- **Never hardcode `LLM_API_KEY` (or any secret) into the loop or its wake
-  script** — it's already in the pod env; just let the child inherit it. A key
-  written to a file is a leak that outlives the run.
-- Verify it registered: `cat .admin/daemons/<name>.pid` and check the agent's
-  card in the UI — it shows a `⟳ tasks` chip; the agent page lists each daemon
-  with a Stop button.
-
-## Verify and debug
-
-```bash
-crontab -l | tail -n 5            # entry is really there
-tail -n 40 /abs/path/cron.log     # what the last wakes did
-```
-
-- macOS: cron may need Full Disk Access (System Settings > Privacy) to read
-  the agent folder; if wakes silently do nothing, check `cron.log` exists at
-  all.
-- Minute granularity is the floor. For "every 30 seconds" use the container
-  loop mode instead.
+Your notes live in the vault, which is on persistent storage and backed up — you
+do not need to commit them to git to keep them (use `git-and-github` when you
+want *history*, not for survival).

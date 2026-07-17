@@ -1,7 +1,7 @@
 ---
 name: web-extraction
-requires: python3, node
-description: Read web pages and extract content/data as clean markdown. Two tools in one skill — Defuddle (a slim CLI, best for simple readable pages like news, blogs, articles, and docs) and Crawl4AI (a full Python toolkit for JavaScript-heavy pages, structured/schema extraction, batch crawling, and authenticated sessions). Use whenever the user gives a URL to read or analyze, wants to scrape a site, extract structured data, handle JS-rendered pages, crawl multiple URLs, or build a web data pipeline. Prefer this over a raw curl fetch for standard web pages to save tokens. Do NOT use for URLs ending in .md — those are already markdown, just curl them.
+requires: curl, jq, python3
+description: Read web pages and extract content/data as clean markdown. On a deployed spirit agent the path is curl + the shared browser-go service ($BROWSER_URL/render); on a glibc dev box or CI runner two richer tools are available — Defuddle (a slim Node CLI, best for simple readable pages like news, blogs, articles, and docs) and Crawl4AI (a full Python toolkit for JavaScript-heavy pages, structured/schema extraction, batch crawling, and authenticated sessions). Use whenever the user gives a URL to read or analyze, wants to scrape a site, extract structured data, handle JS-rendered pages, crawl multiple URLs, or build a web data pipeline. Prefer this over a raw curl fetch for standard web pages to save tokens. Do NOT use for URLs ending in .md — those are already markdown, just curl them.
 version: 0.7.4
 crawl4ai_version: ">=0.7.4"
 last_updated: 2026-06-06
@@ -23,28 +23,40 @@ Converting a *local* file (PDF, .docx, .pptx, .xlsx) or pulling a YouTube
 transcript to markdown is the **markitdown** skill, not this one — this skill
 fetches and reads *live web pages*.
 
-## In the spirit cluster: Defuddle works, Crawl4AI does not — use browser-go
+## In the spirit cluster: neither tool installs — use browser-go
 
-On a **deployed spirit agent** (Alpine/musl + arm64) you cannot install a
-headless browser, so **Crawl4AI's browser-backed features do not run there** —
-it is built on Playwright/Chromium, which has no musl build. Defuddle is fine:
-it is a Node CLI that fetches and cleans HTML, no browser involved.
+On a **deployed spirit agent** (Alpine/musl + arm64) **both tools below are
+unavailable**, for two different reasons:
 
-So on the pod:
-- **Static, readable page** → Defuddle (`npm install -g defuddle`), or a plain `curl`.
-- **JS-rendered page, a screenshot, or a multi-step flow** → the shared
-  **browser-go** service over `curl` (no install). One call renders a page:
+- **Crawl4AI** is built on Playwright/Chromium, which has no musl build — its
+  browser-backed features cannot run.
+- **Defuddle** is a Node CLI, and **`node`/`npm` are not in the image** — there
+  is nothing to `npm install -g` with. (Don't try to bootstrap Node either: a
+  prebuilt musl+arm64 Node is generally absent.)
 
-  ```bash
-  B=http://browser-go.spirit-browser.svc.cluster.local
-  # No auth needed — browser-go runs open inside the cluster (ClusterIP-only):
-  curl -s $B/render -d '{"url":"https://example.com"}'   # {url,title,text,html}
-  ```
+So on the pod there is exactly one path — `curl`, plus the shared **browser-go**
+service for anything a plain fetch can't reach. Its address is in
+`$BROWSER_URL`, injected into every agent run:
 
-  See the **playwright** skill for the full browser-go API (sessions, `/act`, `/shot`).
+```bash
+B="${BROWSER_URL:?BROWSER_URL not set}"
 
-The Crawl4AI sections below apply on a **glibc** machine — a dev box, a CI
-runner, or a non-musl container — where you can install its browser.
+# JS-rendered page → let browser-go render it, then read .text (or .html):
+curl -s $B/render -d '{"url":"https://example.com"}'   # {url,title,text,html}
+curl -s $B/render -d '{"url":"https://example.com"}' | jq -r .text
+```
+
+Send `-H "Authorization: Bearer $BROWSER_TOKEN"` if that variable is set —
+harmless when auth is off, required if it's ever enabled. See the **playwright**
+skill for the full browser-go API (sessions, `/act`, `/shot`, `/pdf`).
+
+- **Static, readable page** → plain `curl` is often enough; pipe it through
+  `python3` if you need to strip tags (stdlib `html.parser`, no install).
+- **JS-rendered page, a screenshot, or a multi-step flow** → `/render`, `/shot`,
+  or a `/act` session as above.
+
+The Defuddle and Crawl4AI sections below apply on a **glibc** machine — a dev
+box, a CI runner, or a non-musl container — where Node and a browser install.
 
 ## Choosing your tool
 
@@ -61,13 +73,18 @@ runner, or a non-musl container — where you can install its browser.
 
 **Rule of thumb:** start with Defuddle. If the page comes back empty or missing content (a sign it's JS-rendered), or you need structure/scale/auth, escalate to Crawl4AI.
 
+**On a deployed agent both columns are off the table** — see the section above;
+use `curl` and `$BROWSER_URL/render` instead.
+
 ---
 
 # Defuddle (slim path)
 
 Extract clean readable content from a web page with a single command. Prefer it over fetching raw HTML with curl for standard pages — it removes navigation, ads, and clutter, reducing token usage.
 
-If not installed: `npm install -g defuddle`
+If not installed: `npm install -g defuddle` — **requires Node, so this is a
+glibc-machine path only**; the deployed agent image has no `npm` (use
+`$BROWSER_URL/render`).
 
 ## Usage
 

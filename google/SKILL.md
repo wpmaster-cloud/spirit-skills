@@ -10,10 +10,8 @@ description: >
   to send an email from their Gmail, read or search their Gmail, email a file as
   an attachment, upload a file to Google Drive, share a Drive link, list/search
   Drive, download a Drive file/Doc, check their calendar / what's coming up, or
-  create/schedule a calendar event. This is the Gmail-over-OAuth path; for a
-  non-Gmail mailbox or plain app-password IMAP/SMTP, use the `email` skill
-  instead — see "Which email skill?" below. Trigger
-  phrases: "gmail", "google drive", "drive", "google calendar", "my calendar",
+  create/schedule a calendar event. This is the only mail path in the catalog.
+  Trigger phrases: "gmail", "google drive", "drive", "google calendar", "my calendar",
   "schedule a meeting", "add an event", "what's on my calendar", "send from my
   gmail", "read my gmail", "search my email", "upload to drive", "share a drive
   link", "download from drive", "google docs", "put this on my google drive".
@@ -26,19 +24,11 @@ APIs. A single OAuth **refresh token** (minted once) is exchanged for short-live
 access tokens on every call by `_common.sh` — so there is nothing to install and
 nothing to re-authorize day to day.
 
-> ## Which email skill? (google vs. email)
-> Two skills can send/read mail and both match "send an email" — pick **one** by
-> what's configured in the environment, don't try both:
->
-> | Configured env var | Use this skill | Why |
-> |---|---|---|
-> | `GOOGLE_REFRESH_TOKEN` set | **`google`** (this one) | Gmail over OAuth, no app password |
-> | only `EMAIL_PASSWORD` / `EMAIL_ADDRESS` set | **`email`** | generic IMAP/SMTP, any host |
-> | both set | **`google`** | OAuth is the more capable Gmail path |
->
-> Check first: `env | grep -E 'GOOGLE_REFRESH_TOKEN|EMAIL_PASSWORD'`. If neither
-> is set, mail isn't configured — say so instead of guessing. The `email` skill
-> is the right choice for iCloud/Outlook/Fastmail/any non-Gmail box.
+> **Check that mail is configured before you promise it.** This skill is the
+> only mail path in the catalog, and it needs an OAuth refresh token:
+> `env | grep GOOGLE_REFRESH_TOKEN`. If that's empty (and there's no
+> `google/config.env`), mail isn't set up — say so and offer step 1 below,
+> rather than guessing at some other transport.
 
 ```
 skills/google/
@@ -58,8 +48,9 @@ skills/google/
     └── google-api.md           # minting the refresh token, scopes, more endpoints, errors
 ```
 
-`run_command`'s working directory is the **workspace root**, so invoke scripts as
-`bash skills/google/scripts/<name>.sh …`.
+`run_command`'s working directory is the agent's **own folder** (also its
+read/write jail), so invoke scripts as `bash skills/google/scripts/<name>.sh …`
+— where you unzipped this skill.
 
 ## 1. One-time setup
 
@@ -71,17 +62,19 @@ values: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`.
 
 **b. Store credentials.** Two options (pick one):
 
-- **Env vars (recommended, secret-safe).** Put these in the environment the agent
-  process starts with — the shell/cron line that launches `agent.sh`, or the pod's
-  Secret-backed env (the deploy's `ops/.env`, injected via envFrom). The runtime
-  does **not** read a `.env` file:
+- **The agent's own `.env` (recommended, secret-safe).** `agent.sh` loads `.env`
+  from the agent's own folder before every run and exports it, so `run_command`
+  children inherit it and the **token never appears in the transcript**. Edit it
+  from the AgentPanel's key icon, or write the file directly:
   ```
   GOOGLE_CLIENT_ID=....apps.googleusercontent.com
   GOOGLE_CLIENT_SECRET=....
   GOOGLE_REFRESH_TOKEN=1//....
   ```
-  `run_command` children inherit the agent's environment, so the **token never
-  appears in the transcript**.
+  One `KEY=VALUE` per line. It is parsed **literally, not sourced** — there is no
+  variable expansion, so a line like `PATH=$PATH:/x` stores that string verbatim
+  and clobbers `PATH`. (The upside: a secret containing `$` or backticks survives
+  intact.)
 
 - **Config file.** `cp skills/google/config.env.example google/config.env`, fill
   it in, and make sure `google/config.env` is git-ignored in the agent's folder.
@@ -168,17 +161,31 @@ bash skills/google/scripts/gcal_add.sh --summary "Trip" \
 prints the new event id + link. Listing needs `calendar.readonly`, creating needs
 `calendar` or `calendar.events`.
 
-## 6. A Gmail-driven assistant (the cron wake pattern)
+## 6. A Gmail-driven assistant (the scheduled wake pattern)
 
 To make the agent watch Gmail and act on incoming mail on a schedule, give it a
-standing wake (the **cron** skill on a host, or the wake-loop `command:` in
-`ops/agent.yaml` for a container). Every firing is a one-shot run against the
-agent's **one session**, so context accumulates and `compact_session` keeps it
-bounded — same pattern as the telegram/whatsapp skills.
+standing wake by dropping a job file in `_cronjobs/` in its own folder — **not
+`crontab`**, which isn't available here (see the **cron** skill for the full
+format). Same pattern as the telegram/whatsapp skills.
 
-```cron
-*/5 * * * * cd /abs/path/agents/gmail-bot && ./agent.sh "Wake: check Gmail by running bash skills/google/scripts/gmail_read.sh --query 'is:unread' --full. For each message that needs action, do it (and reply with gmail_send.sh if asked), then mark it read. If nothing is unread, reply exactly: idle." >> cron.log 2>&1 # spirit-agent:gmail-poll
+```bash
+mkdir -p _cronjobs
+cat > _cronjobs/gmail-poll.json <<'JSON'
+{
+  "id": "gmail-poll",
+  "schedule": "*/5 * * * *",
+  "session": "session.jsonl",
+  "prompt": "Wake: check Gmail by running bash skills/google/scripts/gmail_read.sh --query 'is:unread' --full. For each message that needs action, do it (and reply with gmail_send.sh if asked), then mark it read. If nothing is unread, reply exactly: idle.",
+  "ephemeral": true,
+  "enabled": true
+}
+JSON
 ```
+
+`ephemeral: true` works well here because *Gmail's own read/unread state* is the
+memory — each wake starts clean and only sees what's still unread. Use
+`ephemeral: false` instead if you want the assistant to remember the thread of
+its own past decisions, and call `compact_context` when the session gets long.
 
 **Other uses of the same building blocks:**
 - *Notifications* — call `gmail_send.sh` at the end of a long task to email a report.
@@ -203,8 +210,6 @@ bounded — same pattern as the telegram/whatsapp skills.
   the memory cost.
 - **This sends as the real account** — Gmail has daily send caps (~500/day free)
   and spam policies; don't bulk-send.
-- **Works from a deployed pod unchanged** — every call is HTTPS on 443, which the
-  stock NetworkPolicy in `ops/agent.yaml` already allows.
 
 For minting the refresh token, the scope table, Gmail/Drive query syntax, thread
 & attachment endpoints, folder creation, shared drives, and error codes, read

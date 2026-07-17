@@ -89,8 +89,9 @@ sometimes stale. Once you've picked 1–3 promising URLs, read them properly:
 
 ```bash
 bash skills/web-search/scripts/search.sh "duckdb read parquet from s3" -n 5
-# pick the best URL(s), then:
-defuddle parse <url> --md          # web-extraction skill, slim path
+# pick the best URL(s), then read them — see the web-extraction skill. On a
+# deployed agent that means curl, or browser-go for a JS-rendered page:
+curl -s "${BROWSER_URL:?}/render" -d '{"url":"<url>"}' | jq -r .text
 ```
 
 ## Gotchas
@@ -106,7 +107,7 @@ defuddle parse <url> --md          # web-extraction skill, slim path
 - **Quoting** — pass the query as one argument: `search.sh "two words"`.
   Operators (`site:`, `"exact phrase"`, `-exclude`) ride along inside it.
 - **Kubernetes pods** — every backend speaks HTTPS on 443, so the stock
-  NetworkPolicy in `ops/agent.yaml` already allows it (a self-hosted SearXNG
+  NetworkPolicy in `ops/spirit.yaml` already allows it (a self-hosted SearXNG
   on another port is the one exception — add its port).
 - **Freshness ≠ truth** — `--days` filters by page date as the provider sees
   it; verify load-bearing facts by actually reading the page.

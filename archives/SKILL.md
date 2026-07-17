@@ -1,6 +1,6 @@
 ---
 name: archives
-requires: tar, xz, zstd, unzip
+requires: tar, gzip, xz, zstd, zip, unzip, file
 description: >
   Create, list, and extract archives in the formats the image ships — tar with
   gzip/xz/zstd compression, plain tar, and zip — with one helper that picks the

@@ -15,7 +15,7 @@ description: >
 
 # Notes — a markdown knowledge graph the agent owns
 
-`compact_session` shrinks the current transcript; this skill is **durable,
+`compact_context` shrinks the current transcript; this skill is **durable,
 inspectable** memory that survives restarts and pod replacements. It is a
 **vault of plain `.md` files** — one atomic note each, linked by `[[wikilinks]]`,
 with a small `MEMORY.md` index loaded into context each session. A derived
@@ -29,9 +29,11 @@ A-Mem / Zettelkasten paper, Cline's "memory bank", the Obsidian-MCP servers):
   notes directly; open the folder in Obsidian if you like. The index is a cache.
 - **Wikilinks = the graph.** Relations between notes are explicit and navigable,
   no embeddings required for structure.
-- **Persistence is git.** Commit/push the vault — durable across the ephemeral
-  pod, with human-readable diffs. (`sqlite3` writes in place, so unlike Postgres
-  it is unaffected by the Landlock write-jail.)
+- **Persistence is the disk.** Your folder lives on a PVC that is backed up, so
+  the vault survives a restart or a pod replacement on its own — you do not have
+  to push it anywhere to keep it. Commit it with the **git-and-github** skill when
+  you want *history* and human-readable diffs, not for survival. (`sqlite3` writes
+  in place, so unlike Postgres it is unaffected by the Landlock jail.)
 
 ## Note format (adopted from Basic Memory)
 
@@ -44,7 +46,7 @@ title: Deploy secrets flow
 type: fact            # note | fact | profile | episode | task | summary
 permalink: deploy-secrets-flow
 tags: [deploy, ops]
-importance: 0.8       # 0..1, steers what reflect/forget keep
+importance: 0.8       # 0..1, steers what reflect keeps and what defrag prunes
 ---
 
 ## Observations
@@ -64,8 +66,8 @@ importance: 0.8       # 0..1, steers what reflect/forget keep
 ## Setup
 
 ```bash
-export NOTES_DIR=/work/notes        # the vault (default: ./notes). Keep it under
-                                    # /work so it commits + survives with the agent.
+export NOTES_DIR="$PWD/notes"       # the vault (default: ./notes). Keep it inside
+                                    # your own folder — the only place you can write.
 # Optional semantic recall — reuses the agent's own LLM creds, same as `memory`:
 export BASE_URL="$BASE_URL" LLM_API_KEY="$LLM_API_KEY"
 export EMBED_MODEL=text-embedding-3-small EMBED_DIM=1536   # or MEMORY_EMBEDDER=<cmd>
@@ -74,7 +76,8 @@ bash scripts/notes.sh init
 ```
 
 Embeddings are **optional**. With none configured, recall is full-text (SQLite
-FTS5, `ripgrep` fallback) — already strong for an agent's scale. Configure them
+FTS5, falling back to a `LIKE` scan if the sqlite3 build lacks FTS5) — already
+strong for an agent's scale. Configure them
 and recall becomes **hybrid** (full-text + vector, fused by reciprocal rank, like
 the `memory` skill). The embeddings endpoint caveat applies: `$BASE_URL/embeddings`
 exists on OpenAI, **not** on `sk-ant-` keys — set `MEMORY_EMBEDDER` there.

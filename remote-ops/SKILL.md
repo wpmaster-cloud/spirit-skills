@@ -35,18 +35,28 @@ skills/remote-ops/
     └── sync.sh            # rsync push/pull over the same transport (dry-run first)
 ```
 
-All paths are relative to the **workspace root** (the `run_command` CWD).
+All paths are relative to **your own folder** (the `run_command` CWD).
+
+> **Before you start: port 22 is blocked by default.** The pod's NetworkPolicy
+> (`ops/spirit.yaml`) allows egress on **53, 80 and 443 only**, so a plain `ssh` to
+> port 22 dies at the cluster edge — every host looks unreachable and no flag in
+> this skill can fix it. Confirm with the **net-diag** skill (`port.sh <host> 22`)
+> before debugging keys. Opening 22, or reaching a host that already listens on
+> 443, is an operator change to that manifest — surface it rather than retrying.
 
 ## 1. One-time setup
 
 **a. A key.** Key-based auth only — `BatchMode` disables password prompts on
-purpose. Put a private key somewhere under the workspace (writes are jailed to
-`/work`; `HOME=/work`, so `~/.ssh` is `/work/.ssh`):
+purpose. The key must live **in your own folder**: reads and writes are jailed
+there, and `$HOME` points at the *server's* home — outside your jail — so `~/.ssh`
+is not yours and may simply be denied. Keep the key on a path you own and pass it
+explicitly with `-i` (the scripts do this for you from `SSH_KEY`):
 
 ```bash
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-# drop the key as ~/.ssh/id_remote and lock it down — ssh refuses loose perms:
-chmod 600 ~/.ssh/id_remote
+mkdir -p .ssh && chmod 700 .ssh
+# drop the key as ./.ssh/id_remote and lock it down — ssh refuses loose perms:
+chmod 600 .ssh/id_remote
+export SSH_KEY="$PWD/.ssh/id_remote"
 ```
 
 Commit nothing secret: the GitHub backup's `.gitignore` already excludes `*.key`,
@@ -62,7 +72,8 @@ cp skills/remote-ops/config.env.example remote-ops/config.env
 ```
 
 Env wins over the file. Key vars: `SSH_HOST`, `SSH_USER`, `SSH_PORT` (22),
-`SSH_KEY`, `SSH_KNOWN_HOSTS` (`~/.ssh/known_hosts`), `SSH_STRICT`
+`SSH_KEY`, `SSH_KNOWN_HOSTS` (`.ssh/known_hosts`, under your own folder because
+`~` is not writable by you), `SSH_STRICT`
 (`accept-new` = trust-on-first-use, the default; `yes` = strict; `no` = insecure,
 never in prod), `SSH_CONNECT_TIMEOUT` (15s).
 
@@ -112,29 +123,33 @@ until timeout. Launch it detached, use it, then kill it:
 
 ```bash
 # forward a remote DB to localhost:5433 in the background
-setsid ssh -f -N -o BatchMode=yes -i ~/.ssh/id_remote \
-  -L 5433:localhost:5432 ubuntu@$SSH_HOST </dev/null >/work/.ssh/tunnel.log 2>&1
+setsid ssh -f -N -o BatchMode=yes -i "$SSH_KEY" \
+  -L 5433:localhost:5432 ubuntu@$SSH_HOST </dev/null >tunnel.log 2>&1
 # ... use localhost:5433 ...
 pkill -f '5433:localhost:5432'     # tear it down when done
 ```
 
 `-f -N` (go to background, no remote command) is the canonical non-interactive
-tunnel. Track it as a background task pidfile under `.admin/daemons/` if it should
-outlive the turn (see the agent-workshop background-task convention).
+tunnel. Note it needs the SSH port itself to be reachable, so the NetworkPolicy
+caveat above applies to tunnels first of all.
 
 ## Gotchas (read before debugging a hang)
 
+- **Every host unreachable / connect times out** ⇒ suspect the pod NetworkPolicy
+  (egress 53/80/443 only) before you suspect the host or the key. `port.sh <host>
+  22` from **net-diag** settles it in one call.
 - **Hang on connect** ⇒ almost always a host-key or auth prompt the agent can't
   answer. The scripts set `BatchMode=yes` + `ConnectTimeout`, so they error out
   instead — if you call `ssh` directly, add those yourself.
 - **"Host key verification failed"** ⇒ first contact under `SSH_STRICT=yes`. Use
   `accept-new` (default) for TOFU, or pre-seed `known_hosts` with
-  `ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts`.
+  `ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> "$SSH_KNOWN_HOSTS"`.
 - **"Permissions 0644 for key are too open"** ⇒ `chmod 600` the key.
-- **Egress** ⇒ on a VPN-enabled agent (the `:vpn` image), all outbound traffic
-  goes through the in-image NordVPN tunnel, so SSH exits a NordVPN IP, not the
-  node — fine for most hosts, but if a remote box allowlists source IPs, that
-  won't work (the IP changes when the pod re-dials). Confirm reachability with the
-  **net-diag** skill.
+- **Permission denied reading the key / `known_hosts`** ⇒ the path is outside your
+  folder. `~` is the server's home, not yours: keep both under your own folder and
+  point `SSH_KEY`/`SSH_KNOWN_HOSTS` at them.
+- **Egress** ⇒ there is no VPN or proxy; SSH exits the cluster node's own public
+  IP, which is stable. That is the address to give a remote box that allowlists
+  source IPs — read it with **net-diag**'s `egress.sh`.
 - **Don't bake host trust into a public repo** — `known_hosts` is fine to commit,
   private keys are not.

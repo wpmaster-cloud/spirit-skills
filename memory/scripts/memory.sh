@@ -29,6 +29,8 @@ CHAT_MODEL="${CHAT_MODEL:-${MODEL:-gpt-4o-mini}}"
 
 die() { printf 'memory.sh: %s\n' "$*" >&2; exit 1; }
 
+command -v psql >/dev/null 2>&1 \
+  || die "psql not found — this skill needs the postgresql-client in the image. Use the 'notes' skill (sqlite3, no server) instead."
 PSQL=(psql -v ON_ERROR_STOP=1 -qtAX -F'|')
 [ -n "${DATABASE_URL:-}" ] && PSQL+=("$DATABASE_URL")
 sql() { "${PSQL[@]}" "$@"; }   # ON_ERROR_STOP aborts a multi-statement batch on first error

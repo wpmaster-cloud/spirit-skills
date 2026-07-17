@@ -31,9 +31,9 @@ bash skills/markitdown/scripts/setup.sh
 ```
 
 `setup.sh` will:
-1. find a Python ≥ 3.10 (MarkItDown's minimum),
-2. install `markitdown[all]` via the first available isolated installer — `uv tool` → `pipx` → a dedicated venv (falling back to a `~/.local/bin/markitdown` shim),
-3. best-effort install the optional system deps `ffmpeg` + `exiftool` via apt when available (only needed for audio transcription and image/audio metadata; skipped silently elsewhere — on Alpine/macOS install them yourself if needed),
+1. find a Python ≥ 3.10 (MarkItDown's minimum; the image ships CPython 3.12),
+2. install `markitdown[all]` via the first available isolated installer — `uv tool` → `pipx` → a dedicated venv. **Here it always takes the venv path**: neither `uv` nor `pipx` is in the image, and a bare `pip install` is refused outright (`error: externally-managed-environment`, PEP 668). The venv path works and is the one to expect,
+3. best-effort install the optional system deps `ffmpeg` + `exiftool` via apt when available — this step **no-ops on Alpine**. `ffmpeg` is already baked into the image, so only `exiftool` (image/audio metadata) is genuinely absent,
 4. verify `markitdown --version`.
 
 **Install a subset instead of everything** (smaller, faster) by setting `MARKITDOWN_EXTRAS` before running setup:
@@ -43,26 +43,26 @@ MARKITDOWN_EXTRAS="pdf,docx,pptx,xlsx" bash skills/markitdown/scripts/setup.sh
 ```
 
 ### Manual install (if you prefer / setup.sh can't run)
-MarkItDown requires **Python 3.10+**. Use an isolated environment:
+MarkItDown requires **Python 3.10+**. Use an isolated environment — on this
+runtime a venv is the only option, and it is not optional: `pip install` outside
+one fails with `error: externally-managed-environment` (PEP 668).
 
 ```bash
-# Option A — pipx (puts the `markitdown` CLI on PATH, recommended)
-pipx install 'markitdown[all]'
+# The path that works here — create the venv INSIDE your own folder (the jail
+# denies writes outside it; ~ is the server's home, not yours).
+python3 -m venv .venv
+./.venv/bin/pip install 'markitdown[all]'
+./.venv/bin/markitdown --version        # call it by path; each command is a fresh shell
 
-# Option B — uv
-uv tool install 'markitdown[all]'
-
-# Option C — plain venv
-python3 -m venv .venv && source .venv/bin/activate
-pip install 'markitdown[all]'
+# Elsewhere (a host with pipx/uv), either of these is tidier:
+#   pipx install 'markitdown[all]'
+#   uv tool install 'markitdown[all]'
 ```
 
 Available extras (install only what you need): `[all]`, `[pdf]`, `[docx]`, `[pptx]`, `[xlsx]`, `[xls]`, `[outlook]`, `[audio-transcription]`, `[youtube-transcription]`, `[az-doc-intel]`, `[az-content-understanding]`. Example: `pip install 'markitdown[pdf, docx, pptx]'`.
 
-If Python ≥ 3.10 is missing entirely, get one with the **install-runtimes**
-skill (`uv`-managed CPython, works on Alpine/musl without root), or use the
-host's package manager (`apt-get install python3 python3-venv pipx` on Debian,
-`apk add python3 py3-pip` on Alpine with root, `brew install python` on macOS).
+Python 3.12 is already in the image, so the "no Python" case does not arise
+here. On another host without it, see the **install-runtimes** skill.
 
 ## Step 2 — Convert
 

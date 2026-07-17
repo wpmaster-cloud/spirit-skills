@@ -10,12 +10,12 @@ description: >
   knowledge over time, or when the user says "remember this", "what do you know
   about…", "forget…", or wants persistent memory. Inspired by long-term-memory
   designs in agent systems (reflection, importance, decay). Distinct from
-  compact_session, which only shrinks the current transcript.
+  compact_context, which only shrinks the current transcript.
 ---
 
 # Memory (PostgreSQL + pgvector)
 
-`compact_session` summarizes the *current* conversation; this skill is the
+`compact_context` summarizes the *current* conversation; this skill is the
 agent's **durable** memory that survives restarts and pod replacements. It is a
 single Postgres table where every memory carries a vector embedding *and* a
 full-text index, plus an importance score and usage stats — so recall is hybrid
@@ -24,11 +24,13 @@ and self-reinforcing, and the store can forget what stops mattering.
 All operations go through `scripts/memory.sh`. Read its header for flags.
 
 **Lighter alternative — the `notes` skill.** If you want durable memory *without*
-standing up Postgres — file-based, git-persisted, human-readable — use **`notes`**
+standing up Postgres — file-based, human-readable, no server — use **`notes`**
 (an Obsidian-style markdown vault + derived SQLite index, same hybrid recall, no
-server/`5432`/`EXDEV`). Pick **`notes`** for a single agent's knowledge base (the
+`5432`/`EXDEV`). Pick **`notes`** for a single agent's knowledge base (the
 default); pick **this** skill for high-volume semantic recall or a shared,
-multi-agent store.
+multi-agent store. Note this skill needs a Postgres you can actually **reach**:
+the pod's NetworkPolicy allows egress on 53/80/443 only, so on a stock deploy
+`notes` is the one that works today (see Notes at the bottom).
 
 ## Why one table, two indexes
 
@@ -125,13 +127,15 @@ A capable agent uses memory on both ends of a turn:
 - One shared DB can serve a whole fleet: partition with `--source <agent>` on
   `remember` (or set `MEMORY_SOURCE` once per agent), or use a separate
   database/schema per agent if you need hard isolation.
-- This is durable state: for an ephemeral container, the Postgres lives outside
-  the pod (a service), so memory survives pod replacement by design. Note the
-  stock NetworkPolicy in `ops/agent.yaml` only allows egress on 53/443/80 —
-  add 5432 (or run Postgres in-pod) before a deployed agent can reach it.
-- **Running Postgres *inside* the agent hits the Landlock write-jail**: `initdb`
-  and startup fail with `Cross-device link (os error 18)` / `EXDEV`. You can't
-  lift the jail mid-run — if in-pod Postgres is required, the operator must set
-  `SANDBOX_WRITES=0` in the deploy's `ops/.env` (pod-wide) and redeploy. An external
-  Postgres service avoids this entirely, so prefer it (see `install-runtimes`,
-  "Databases", for the full note). `sqlite3` is unaffected — it writes in-place.
+- This is durable state, and it lives outside the pod (a service), so it is
+  independent of the agent's own lifecycle. **Reachability is the catch:** the
+  stock NetworkPolicy in `ops/spirit.yaml` only allows egress on 53/443/80, so a
+  Postgres on 5432 is unreachable until an operator opens the port. That is a
+  manifest change — surface it rather than working around it.
+- **Running Postgres *inside* the agent hits the Landlock jail**: `initdb` and
+  startup fail with `Cross-device link (os error 18)` / `EXDEV`. There is no way
+  around it from here — the jail is applied when your process starts, and the
+  server hardcodes it on every run it triggers, so no `.env` setting will lift it.
+  An external Postgres is the only real path (see `install-runtimes`, "Databases",
+  for the full note). `sqlite3` is unaffected — it writes in-place, which is why
+  `notes` works with no server at all.
